@@ -2,6 +2,7 @@ package com.desk.sentry
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.TimePickerDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -37,7 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = true
     private var isAlwaysActiveMode = false
-    private var absenceThresholdMs = 180000L // 3 Minutes default
+    private var absenceThresholdMs = 180000L // 3 min default
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var mediaPlayer: MediaPlayer? = null
@@ -46,6 +47,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
+    private lateinit var tvSlot1Display: TextView
+    private lateinit var tvSlot2Display: TextView
+    private lateinit var btnEditSlot1: Button
+    private lateinit var btnEditSlot2: Button
     private lateinit var tvAdminStatus: TextView
     private lateinit var btnActivateAdmin: Button
     private lateinit var switchMasterSentry: SwitchMaterial
@@ -69,6 +74,7 @@ class MainActivity : AppCompatActivity() {
 
         initViews()
         setupListeners()
+        updateSlotDisplays()
         initAlarmSound()
 
         if (allPermissionsGranted()) {
@@ -84,6 +90,10 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         tvLiveStatus = findViewById(R.id.tvLiveStatus)
         tvCountdown = findViewById(R.id.tvCountdown)
+        tvSlot1Display = findViewById(R.id.tvSlot1Display)
+        tvSlot2Display = findViewById(R.id.tvSlot2Display)
+        btnEditSlot1 = findViewById(R.id.btnEditSlot1)
+        btnEditSlot2 = findViewById(R.id.btnEditSlot2)
         tvAdminStatus = findViewById(R.id.tvAdminStatus)
         btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
         switchMasterSentry = findViewById(R.id.switchMasterSentry)
@@ -113,20 +123,20 @@ class MainActivity : AppCompatActivity() {
                 R.id.rb30s -> 30000L
                 R.id.rb1m -> 60000L
                 R.id.rb5m -> 300000L
-                else -> 180000L // 3 min default
+                else -> 180000L
             }
         }
 
-        btnActivateAdmin.setOnClickListener {
-            requestDeviceAdmin()
-        }
+        btnEditSlot1.setOnClickListener { showSetSlotDialog(1) }
+        btnEditSlot2.setOnClickListener { showSetSlotDialog(2) }
+
+        btnActivateAdmin.setOnClickListener { requestDeviceAdmin() }
 
         btnEnterStealth.setOnClickListener {
             stealthOverlay.visibility = View.VISIBLE
             dashboardLayout.visibility = View.GONE
         }
 
-        // Double tap on Stealth Black Screen to prompt unlock
         stealthOverlay.setOnClickListener {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < 500) {
@@ -135,14 +145,12 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
-        btnChangePin.setOnClickListener {
-            showChangePinDialog()
-        }
+        btnChangePin.setOnClickListener { showChangePinDialog() }
 
         btnTestAlarm.setOnClickListener {
             if (mediaPlayer?.isPlaying == true) {
                 stopAlarm()
-                btnTestAlarm.text = "Test Alarm Sound"
+                btnTestAlarm.text = "Test Loud Alarm"
             } else {
                 startAlarm()
                 btnTestAlarm.text = "Stop Alarm Test"
@@ -150,11 +158,79 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showSetSlotDialog(slotNumber: Int) {
+        val defaultStart = if (slotNumber == 1) 5 else 10
+        val defaultEnd = if (slotNumber == 1) 9 else 14
+
+        val currentStartHour = prefs.getInt("slot_${slotNumber}_start_h", defaultStart)
+        val currentStartMin = prefs.getInt("slot_${slotNumber}_start_m", 0)
+        val currentEndHour = prefs.getInt("slot_${slotNumber}_end_h", defaultEnd)
+        val currentEndMin = prefs.getInt("slot_${slotNumber}_end_m", 0)
+
+        // Pick Start Time
+        val startPicker = TimePickerDialog(this, { _, startH, startM ->
+            // Pick End Time
+            val endPicker = TimePickerDialog(this, { _, endH, endM ->
+                prefs.edit().apply {
+                    putInt("slot_${slotNumber}_start_h", startH)
+                    putInt("slot_${slotNumber}_start_m", startM)
+                    putInt("slot_${slotNumber}_end_h", endH)
+                    putInt("slot_${slotNumber}_end_m", endM)
+                    apply()
+                }
+                updateSlotDisplays()
+                Toast.makeText(this, "Slot $slotNumber Updated!", Toast.LENGTH_SHORT).show()
+            }, currentEndHour, currentEndMin, false)
+            endPicker.setTitle("Set Slot $slotNumber End Time")
+            endPicker.show()
+        }, currentStartHour, currentStartMin, false)
+
+        startPicker.setTitle("Set Slot $slotNumber Start Time")
+        startPicker.show()
+    }
+
+    private fun updateSlotDisplays() {
+        val s1StartH = prefs.getInt("slot_1_start_h", 5)
+        val s1StartM = prefs.getInt("slot_1_start_m", 0)
+        val s1EndH = prefs.getInt("slot_1_end_h", 9)
+        val s1EndM = prefs.getInt("slot_1_end_m", 0)
+
+        val s2StartH = prefs.getInt("slot_2_start_h", 10)
+        val s2StartM = prefs.getInt("slot_2_start_m", 0)
+        val s2EndH = prefs.getInt("slot_2_end_h", 14)
+        val s2EndM = prefs.getInt("slot_2_end_m", 0)
+
+        tvSlot1Display.text = "Slot 1: ${formatTime(s1StartH, s1StartM)} – ${formatTime(s1EndH, s1EndM)}"
+        tvSlot2Display.text = "Slot 2: ${formatTime(s2StartH, s2StartM)} – ${formatTime(s2EndH, s2EndM)}"
+    }
+
+    private fun formatTime(hour: Int, minute: Int): String {
+        val amPm = if (hour >= 12) "PM" else "AM"
+        val displayHour = when {
+            hour == 0 -> 12
+            hour > 12 -> hour - 12
+            else -> hour
+        }
+        return String.format("%02d:%02d %s", displayHour, minute, amPm)
+    }
+
     private fun isEffectiveStudyTime(): Boolean {
         if (!isSentryArmed) return false
         if (isAlwaysActiveMode) return true
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return (hour in 5..8) || (hour in 10..13)
+
+        val now = Calendar.getInstance()
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        val s1Start = prefs.getInt("slot_1_start_h", 5) * 60 + prefs.getInt("slot_1_start_m", 0)
+        val s1End = prefs.getInt("slot_1_end_h", 9) * 60 + prefs.getInt("slot_1_end_m", 0)
+
+        val s2Start = prefs.getInt("slot_2_start_h", 10) * 60 + prefs.getInt("slot_2_start_m", 0)
+        val s2End = prefs.getInt("slot_2_end_h", 14) * 60 + prefs.getInt("slot_2_end_m", 0)
+
+        val inSlot1 = currentMinutes in s1Start until s1End
+        val inSlot2 = currentMinutes in s2Start until s2End
+
+        return inSlot1 || inSlot2
     }
 
     private fun startCamera() {
@@ -167,6 +243,10 @@ class MainActivity : AppCompatActivity() {
                 .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
                 .build()
             val poseDetector = PoseDetection.getClient(options)
+
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
 
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -182,9 +262,7 @@ class MainActivity : AppCompatActivity() {
                 val camera = cameraProvider.bindToLifecycle(
                     this,
                     cameraSelector,
-                    previewView.surfaceProvider?.let {
-                        Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                    },
+                    preview,
                     imageAnalysis
                 )
 
@@ -293,7 +371,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showUnlockPinDialog() {
         val input = EditText(this).apply {
-            hint = "Enter PIN"
+            hint = "Enter 4-digit PIN"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setTextColor(Color.BLACK)
             setBackgroundResource(android.R.drawable.edit_text)
