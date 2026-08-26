@@ -125,7 +125,93 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- MASTER SWITCH & OVERRIDE -->
+                <!-- 1. OFFICIAL BREAK BANK CARD -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="6dp"
+                    app:cardCornerRadius="10dp"
+                    app:cardBackgroundColor="@color/card_dark">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="10dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/tvBreakBankHeader"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="☕ Official Break Bank: 30m Left"
+                                android:textColor="@color/accent_blue"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvBreakTimerLive"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="No Break Active"
+                                android:textColor="@color/text_dim"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <!-- BREAK ACTION BUTTONS -->
+                        <LinearLayout
+                            android:id="@+id/layoutBreakButtons"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="6dp">
+
+                            <Button
+                                android:id="@+id/btnTakeBreak15"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:text="☕ Take 15m Break"
+                                android:textSize="11sp"
+                                android:textAllCaps="false"
+                                android:layout_marginEnd="3dp"
+                                android:backgroundTint="#0F766E" />
+
+                            <Button
+                                android:id="@+id/btnTakeBreak30"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:text="☕ Take 30m Break"
+                                android:textSize="11sp"
+                                android:textAllCaps="false"
+                                android:layout_marginStart="3dp"
+                                android:backgroundTint="#0F766E" />
+                        </LinearLayout>
+
+                        <!-- RESUME STUDY EARLY BUTTON (VISIBLE DURING ACTIVE BREAK) -->
+                        <Button
+                            android:id="@+id/btnResumeStudyEarly"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:layout_marginTop="6dp"
+                            android:text="▶ Back at Desk! Resume Study &amp; Save Bank"
+                            android:textSize="11sp"
+                            android:textAllCaps="false"
+                            android:textColor="@color/text_white"
+                            android:backgroundTint="#22C55E"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 2. MASTER SWITCH & OVERRIDE -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -151,7 +237,7 @@
                                 android:layout_weight="1"
                                 android:text="Desk Sentry AI Master"
                                 android:textColor="@color/accent_blue"
-                                android:textSize="15sp"
+                                android:textSize="14sp"
                                 android:textStyle="bold" />
 
                             <com.google.android.material.switchmaterial.SwitchMaterial
@@ -171,7 +257,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 24/7 BACKGROUND GUARD SWITCH CARD -->
+                <!-- 3. 24/7 BACKGROUND GUARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -216,7 +302,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 5 CUSTOM STUDY SLOTS -->
+                <!-- 4. 5 CUSTOM STUDY SLOTS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -385,7 +471,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- AWAY GRACE PERIOD -->
+                <!-- 5. AWAY GRACE PERIOD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -402,7 +488,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Away Grace Period (Break Time)"
+                            android:text="Micro-Away Buffer (Water / Stretch)"
                             android:textColor="@color/accent_blue"
                             android:textSize="12sp"
                             android:textStyle="bold" />
@@ -450,7 +536,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- SECURITY & TOOLS -->
+                <!-- 6. SECURITY & TOOLS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -524,7 +610,7 @@
         </ScrollView>
     </LinearLayout>
 
-    <!-- STEALTH OLED OVERLAY (DOUBLE TAP TO EXIT DIRECTLY - NO PIN REQUIRED) -->
+    <!-- STEALTH OLED OVERLAY -->
     <LinearLayout
         android:id="@+id/stealthOverlay"
         android:layout_width="match_parent"
