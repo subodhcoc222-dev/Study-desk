@@ -11,6 +11,7 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private var mediaPlayer: MediaPlayer? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var isUsingBackCamera = true
+    private lateinit var audioManager: AudioManager
 
     // Anti-Ghosting Counters
     private var sustainedPresentFrameCount = 0
@@ -118,6 +120,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         checkOverlayAndBatteryPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
@@ -587,7 +590,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(40, 20, 40, 10)
         }
 
-        // 1. Time Range Section
         val btnStartTime = Button(this).apply {
             text = "Start: ${formatTime(startH, startM)}"
             textSize = 12f
@@ -620,7 +622,6 @@ class MainActivity : AppCompatActivity() {
         }
         dialogView.addView(timeRow)
 
-        // 2. Custom Break Bank Input Field
         val tvBreakHeader = TextView(this).apply {
             text = "Total Break Allowance for this Slot (Minutes):"
             textSize = 13f
@@ -639,7 +640,6 @@ class MainActivity : AppCompatActivity() {
         }
         dialogView.addView(etBreakMins)
 
-        // 3. Days of the Week Selection
         val tvDaysHeader = TextView(this).apply {
             text = "Select Active Days:"
             textSize = 13f
@@ -676,7 +676,6 @@ class MainActivity : AppCompatActivity() {
                 editor.putInt("slot_${slotNumber}_end_m", endM)
                 editor.putBoolean("slot_${slotNumber}_enabled", true)
 
-                // Save custom break allowance
                 val parsedMins = etBreakMins.text.toString().trim().toIntOrNull() ?: currentBreakMins
                 editor.putInt("slot_${slotNumber}_break_bank_mins", parsedMins.coerceAtLeast(0))
 
@@ -856,7 +855,7 @@ class MainActivity : AppCompatActivity() {
      * 2-STAGE MONITORING LOOP:
      * Stage 1: Free Quick Buffer (e.g. 3 mins)
      * Stage 2: Slot's Configured Break Bank Deduction
-     * Stage 3: Loud Alarm when Break Bank reaches 0s
+     * Stage 3: Loud Alarm when Break Bank reaches 0s (Enforces 100% Max Volume)
      */
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
@@ -901,10 +900,10 @@ class MainActivity : AppCompatActivity() {
                                 tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
                                 stopAlarmAndFinishAbsence()
                             } else {
-                                // Stage 3: Break Bank Empty -> Loud Alarm
+                                // Stage 3: Break Bank Empty -> LOUD ALARM AT 100% MAXIMUM VOLUME
                                 tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
                                 tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
-                                tvCountdown.text = "STATUS: LOUD ALARM RINGING (RETURN TO DESK)"
+                                tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
 
                                 if (!isAlarmCurrentlyTracking) {
                                     alarmTriggerStartMs = System.currentTimeMillis()
@@ -1065,8 +1064,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * UNCOMPROMISING MAX VOLUME ALARM ENFORCER:
+     * - Overrides system silent/vibration
+     * - Forces STREAM_ALARM & STREAM_MUSIC to 100% MAXIMUM Level
+     */
     private fun startAlarm() {
-        if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
+        try {
+            val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarmVol, 0)
+
+            val maxMusicVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusicVol, 0)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (mediaPlayer?.isPlaying == false) {
+            mediaPlayer?.start()
+        }
     }
 
     private fun updateAdminStatusUI() {
