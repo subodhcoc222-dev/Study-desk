@@ -34,6 +34,7 @@ import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import java.util.Calendar
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -47,9 +48,11 @@ class MainActivity : AppCompatActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var isUsingBackCamera = true
 
-    // Anti-flicker frame counters
-    private var consecutivePresentFrames = 0
-    private var consecutiveAbsentFrames = 0
+    // Advanced Anti-Ghosting Counters
+    private var sustainedPresentFrameCount = 0
+    private var sustainedAbsentFrameCount = 0
+    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 15 // ~1.5 seconds of steady human presence to reset timer
+    private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6   // ~0.5 seconds of absence to start countdown
 
     // UI Elements
     private lateinit var previewView: PreviewView
@@ -322,56 +325,81 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * ACCURATE UPPER BODY DETECTION FILTER
-     * Eliminates false positives from chandeliers, coolers, shadows, and furniture.
+     * ULTRA-ACCURATE DESK USER VALIDATOR
+     * Rejects background chandeliers, cooler slats, curtains, and shadows.
      */
-    private fun isRealUserPresent(pose: Pose): Boolean {
-        val minConfidence = 0.65f // Must be at least 65% confident
+    private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
+        val minConfidence = 0.70f // High confidence threshold
 
-        val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
-        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
-        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
-        val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
-        val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
-        val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
-        val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
+        val nose = pose.getPoseLandmark(PoseLandmark.NOSE) ?: return false
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER) ?: return false
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER) ?: return false
 
-        val hasNose = nose != null && nose.inFrameLikelihood >= minConfidence
-        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
-        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
-        val hasEyesOrEars = (leftEye != null && leftEye.inFrameLikelihood >= minConfidence) ||
-                            (rightEye != null && rightEye.inFrameLikelihood >= minConfidence) ||
-                            (leftEar != null && leftEar.inFrameLikelihood >= minConfidence) ||
-                            (rightEar != null && rightEar.inFrameLikelihood >= minConfidence)
+        // 1. Confidence check
+        if (nose.inFrameLikelihood < minConfidence ||
+            leftShoulder.inFrameLikelihood < minConfidence ||
+            rightShoulder.inFrameLikelihood < minConfidence) {
+            return false
+        }
 
-        // Rule: Must detect (Both Shoulders) OR (Head/Face AND At Least One Shoulder)
-        val hasBothShoulders = hasLeftShoulder && hasRightShoulder
-        val hasFaceAndShoulder = (hasNose || hasEyesOrEars) && (hasLeftShoulder || hasRightShoulder)
+        val nosePos = nose.position
+        val lShoulderPos = leftShoulder.position
+        val rShoulderPos = rightShoulder.position
 
-        return hasBothShoulders || hasFaceAndShoulder
+        // 2. Anatomical Rule: Head/Nose must be vertically ABOVE shoulders
+        if (nosePos.y >= lShoulderPos.y && nosePos.y >= rShoulderPos.y) {
+            return false
+        }
+
+        // 3. Proximity / Scale Check (Shoulder Span):
+        // A human sitting in front of a desk camera spans at least 15% of frame width.
+        // Chandelier / cooler false positives are tiny (<10%) or absurdly wide.
+        val shoulderSpan = abs(lShoulderPos.x - rShoulderPos.x)
+        val minSpan = imgWidth * 0.14f
+        val maxSpan = imgWidth * 0.88f
+        if (shoulderSpan < minSpan || shoulderSpan > maxSpan) {
+            return false
+        }
+
+        // 4. Exclusion Zone (Ceiling / Chandelier Filter):
+        // Person sitting at desk has nose within 10% to 85% of screen height
+        if (nosePos.y < imgHeight * 0.08f || nosePos.y > imgHeight * 0.85f) {
+            return false
+        }
+
+        return true
     }
 
     @SuppressLint("UnsafeOptInUsageError")
     private fun processCameraFrame(imageProxy: ImageProxy, poseDetector: com.google.mlkit.vision.pose.PoseDetector) {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
-            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            val rotation = imageProxy.imageInfo.rotationDegrees
+            val isRotated = rotation == 90 || rotation == 270
+            val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
+            val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
+
+            val image = InputImage.fromMediaImage(mediaImage, rotation)
             poseDetector.process(image)
                 .addOnSuccessListener { pose ->
-                    val frameDetected = isRealUserPresent(pose)
+                    val frameValid = isRealDeskUser(pose, effWidth, effHeight)
 
-                    // Temporal Smoothing Debounce (Requires 3 stable frames to switch)
-                    if (frameDetected) {
-                        consecutivePresentFrames++
-                        consecutiveAbsentFrames = 0
-                        if (consecutivePresentFrames >= 2) {
+                    // HYSTERESIS STATE MACHINE:
+                    // Requires 15 continuous valid frames (~1.5 seconds) to declare user PRESENT.
+                    // Momentary ghost detections (<15 frames) are completely ignored.
+                    if (frameValid) {
+                        sustainedPresentFrameCount++
+                        sustainedAbsentFrameCount = 0
+
+                        if (sustainedPresentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_PRESENT) {
                             isPersonCurrentlyPresent = true
                             lastSeenTimestamp = System.currentTimeMillis()
                         }
                     } else {
-                        consecutiveAbsentFrames++
-                        consecutivePresentFrames = 0
-                        if (consecutiveAbsentFrames >= 3) {
+                        sustainedAbsentFrameCount++
+                        sustainedPresentFrameCount = 0
+
+                        if (sustainedAbsentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_ABSENT) {
                             isPersonCurrentlyPresent = false
                         }
                     }
