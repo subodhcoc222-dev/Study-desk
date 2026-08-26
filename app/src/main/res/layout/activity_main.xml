@@ -33,13 +33,11 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent">
 
-                    <!-- CAMERA PREVIEW VIEW -->
                     <androidx.camera.view.PreviewView
                         android:id="@+id/previewView"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent" />
 
-                    <!-- TOP STATUS BADGE -->
                     <TextView
                         android:id="@+id/tvLiveStatus"
                         android:layout_width="wrap_content"
@@ -54,7 +52,6 @@
                         android:textSize="12sp"
                         android:textStyle="bold" />
 
-                    <!-- CAMERA FLIP BUTTON (REAR / FRONT) -->
                     <Button
                         android:id="@+id/btnFlipCamera"
                         android:layout_width="wrap_content"
@@ -62,13 +59,12 @@
                         android:layout_gravity="top|end"
                         android:layout_margin="10dp"
                         android:backgroundTint="#D9000000"
-                        android:text="🔄 Flip Lens"
+                        android:text="🔄 Lens"
                         android:textColor="@color/text_white"
                         android:textSize="10sp"
                         android:textAllCaps="false"
                         android:paddingHorizontal="8dp" />
 
-                    <!-- BOTTOM COUNTDOWN / STATUS -->
                     <TextView
                         android:id="@+id/tvCountdown"
                         android:layout_width="wrap_content"
@@ -84,17 +80,37 @@
                 </FrameLayout>
             </androidx.cardview.widget.CardView>
 
-            <!-- STEALTH OLED MODE BUTTON -->
-            <Button
-                android:id="@+id/btnEnterStealth"
+            <!-- EVENTS & STEALTH BUTTONS -->
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:layout_marginTop="6dp"
-                android:text="🌙 Start Stealth OLED Mode (Black Screen)"
-                android:textAllCaps="false"
-                android:textColor="@color/text_white"
-                android:backgroundTint="@color/card_dark"
-                android:textSize="12sp" />
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp">
+
+                <Button
+                    android:id="@+id/btnOpenEvents"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="📊 Events Log"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_white"
+                    android:backgroundTint="@color/accent_blue"
+                    android:textSize="11sp"
+                    android:layout_marginEnd="4dp" />
+
+                <Button
+                    android:id="@+id/btnEnterStealth"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1.3"
+                    android:text="🌙 Stealth Mode"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_white"
+                    android:backgroundTint="@color/card_dark"
+                    android:textSize="11sp"
+                    android:layout_marginStart="4dp" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- RIGHT PANEL: 5 SLOTS & CONTROLS -->
@@ -109,7 +125,6 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- 1. MASTER SENTRY SWITCH & OVERRIDE -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -155,7 +170,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 2. 5 CUSTOM STUDY SLOTS -->
+                <!-- 5 CUSTOM STUDY SLOTS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -193,7 +208,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Slot 1: 05:00 AM – 09:00 AM"
+                                android:text="Slot 1"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
                             <Button
@@ -222,7 +237,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Slot 2: 10:00 AM – 02:00 PM"
+                                android:text="Slot 2"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
                             <Button
@@ -251,7 +266,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Slot 3: 03:00 PM – 06:00 PM"
+                                android:text="Slot 3"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
                             <Button
@@ -280,7 +295,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Slot 4: 07:00 PM – 09:00 PM"
+                                android:text="Slot 4"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
                             <Button
@@ -309,7 +324,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Slot 5: 09:30 PM – 11:30 PM"
+                                android:text="Slot 5"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
                             <Button
@@ -324,7 +339,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 3. AWAY GRACE PERIOD -->
+                <!-- AWAY GRACE PERIOD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -357,7 +372,7 @@
                                 android:id="@+id/rb30s"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="30s (Test)"
+                                android:text="30s"
                                 android:textColor="@color/text_white"
                                 android:textSize="11sp" />
 
@@ -389,7 +404,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 4. SECURITY & TOOLS -->
+                <!-- SECURITY & TOOLS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -450,7 +465,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="36dp"
                                 android:layout_weight="1"
-                                android:text="Test Loud Alarm"
+                                android:text="Test Alarm"
                                 android:textSize="11sp"
                                 android:textAllCaps="false"
                                 android:layout_marginStart="4dp"
