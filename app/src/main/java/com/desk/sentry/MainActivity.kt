@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -33,6 +34,8 @@ import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
@@ -43,7 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = true
     private var isAlwaysActiveMode = false
-    private var absenceThresholdMs = 180000L // 3 min default
+    private var absenceThresholdMs = 180000L
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var mediaPlayer: MediaPlayer? = null
@@ -53,14 +56,13 @@ class MainActivity : AppCompatActivity() {
     // Anti-Ghosting Counters
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
-    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 15
+    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 10
     private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6
 
-    // Analytics tracking variables
+    // Real-Time Analytics State
     private var currentActiveSlot: Int = -1
-    private var slotPresentStartMs = 0L
-    private var slotAbsentStartMs = 0L
-    private var isCurrentlyAbsentRecorded = false
+    private var alarmTriggerStartMs: Long = 0L
+    private var isAlarmCurrentlyTracking: Boolean = false
 
     // UI Elements
     private lateinit var previewView: PreviewView
@@ -111,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         startMonitoringLoop()
+        startPeriodicTimeTracker()
     }
 
     private fun initViews() {
@@ -143,7 +146,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         switchMasterSentry.setOnCheckedChangeListener { _, isChecked ->
             isSentryArmed = isChecked
-            if (!isChecked) stopAlarm()
+            if (!isChecked) stopAlarmAndFinishAbsence()
         }
 
         switchAlwaysActive.setOnCheckedChangeListener { _, isChecked ->
@@ -157,7 +160,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnOpenEvents.setOnClickListener {
-            showEventsDialog()
+            showEventsLevel1DateList()
         }
 
         rgGracePeriod.setOnCheckedChangeListener { _, checkedId ->
@@ -195,7 +198,7 @@ class MainActivity : AppCompatActivity() {
 
         btnTestAlarm.setOnClickListener {
             if (mediaPlayer?.isPlaying == true) {
-                stopAlarm()
+                stopAlarmAndFinishAbsence()
                 btnTestAlarm.text = "Test Alarm"
             } else {
                 startAlarm()
@@ -341,7 +344,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun getActiveStudySlot(): Int {
         if (!isSentryArmed) return -1
-        if (isAlwaysActiveMode) return 1 // Default to slot 1 in test mode
+        if (isAlwaysActiveMode) return 1
 
         val now = Calendar.getInstance()
         val currentDayOfWeek = now.get(Calendar.DAY_OF_WEEK)
@@ -404,19 +407,56 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * ROBUST STUDY & WRITING POSE DETECTOR
+     * Accurately detects user sitting, reading, or bending down to write on desk!
+     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val nose = pose.getPoseLandmark(PoseLandmark.NOSE) ?: return false
-        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER) ?: return false
-        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER) ?: return false
+        val minConfidence = 0.45f
 
-        if (nose.inFrameLikelihood < 0.70f || leftShoulder.inFrameLikelihood < 0.70f || rightShoulder.inFrameLikelihood < 0.70f) return false
-        if (nose.position.y >= leftShoulder.position.y && nose.position.y >= rightShoulder.position.y) return false
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
+        val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
+        val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
+        val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
+        val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
+        val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
+        val mouthLeft = pose.getPoseLandmark(PoseLandmark.MOUTH_LEFT)
+        val mouthRight = pose.getPoseLandmark(PoseLandmark.MOUTH_RIGHT)
 
-        val shoulderSpan = abs(leftShoulder.position.x - rightShoulder.position.x)
-        if (shoulderSpan < imgWidth * 0.14f || shoulderSpan > imgWidth * 0.88f) return false
-        if (nose.position.y < imgHeight * 0.08f || nose.position.y > imgHeight * 0.85f) return false
+        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
+        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
 
-        return true
+        if (!hasLeftShoulder && !hasRightShoulder) return false
+
+        if (hasLeftShoulder && hasRightShoulder) {
+            val shoulderSpan = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
+            if (shoulderSpan < imgWidth * 0.10f || shoulderSpan > imgWidth * 0.95f) {
+                return false
+            }
+        }
+
+        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.35f) ||
+                (leftEye != null && leftEye.inFrameLikelihood >= 0.35f) ||
+                (rightEye != null && rightEye.inFrameLikelihood >= 0.35f) ||
+                (leftEar != null && leftEar.inFrameLikelihood >= 0.35f) ||
+                (rightEar != null && rightEar.inFrameLikelihood >= 0.35f) ||
+                (mouthLeft != null && mouthLeft.inFrameLikelihood >= 0.35f) ||
+                (mouthRight != null && mouthRight.inFrameLikelihood >= 0.35f)
+
+        val refY = if (hasLeftShoulder && hasRightShoulder) {
+            (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
+        } else if (hasLeftShoulder) {
+            leftShoulder!!.position.y
+        } else {
+            rightShoulder!!.position.y
+        }
+
+        if (refY < imgHeight * 0.05f || refY > imgHeight * 0.98f) {
+            return false
+        }
+
+        return hasHeadOrFace
     }
 
     @SuppressLint("UnsafeOptInUsageError")
@@ -456,33 +496,22 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post(object : Runnable {
             override fun run() {
                 val activeSlot = getActiveStudySlot()
+                currentActiveSlot = activeSlot
 
                 if (activeSlot == -1) {
                     tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
                     tvLiveStatus.setTextColor(Color.GRAY)
                     tvCountdown.text = "Schedule: Inactive"
-                    stopAlarm()
-                    currentActiveSlot = -1
+                    stopAlarmAndFinishAbsence()
                 } else {
-                    // Handle slot transition analytics logging
-                    if (currentActiveSlot != activeSlot) {
-                        currentActiveSlot = activeSlot
-                        slotPresentStartMs = System.currentTimeMillis()
-                    }
-
                     if (isPersonCurrentlyPresent) {
                         tvLiveStatus.text = "● USER PRESENT & DETECTED"
                         tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
                         tvCountdown.text = "Desk Status: Normal"
 
-                        // If returning from absence, log absent duration
-                        if (isCurrentlyAbsentRecorded) {
-                            val absentDuration = (System.currentTimeMillis() - slotAbsentStartMs) / 1000
-                            logAnalyticsEvent(activeSlot, "ABSENT", absentDuration)
-                            isCurrentlyAbsentRecorded = false
+                        if (isAlarmCurrentlyTracking) {
+                            stopAlarmAndFinishAbsence()
                         }
-
-                        stopAlarm()
                     } else {
                         val awayDuration = System.currentTimeMillis() - lastSeenTimestamp
                         val remainingMs = absenceThresholdMs - awayDuration
@@ -492,19 +521,16 @@ class MainActivity : AppCompatActivity() {
                             tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
                             tvCountdown.text = "STATUS: ALARM ACTIVE"
 
-                            // Start tracking absence when alarm triggers
-                            if (!isCurrentlyAbsentRecorded) {
-                                slotAbsentStartMs = System.currentTimeMillis()
-                                isCurrentlyAbsentRecorded = true
+                            if (!isAlarmCurrentlyTracking) {
+                                alarmTriggerStartMs = System.currentTimeMillis()
+                                isAlarmCurrentlyTracking = true
                             }
-
                             startAlarm()
                         } else {
                             val secondsLeft = (remainingMs / 1000).toInt()
                             tvLiveStatus.text = "● USER AWAY FROM DESK"
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
                             tvCountdown.text = "Grace Timeout: ${secondsLeft}s remaining"
-                            stopAlarm()
                         }
                     }
                 }
@@ -513,43 +539,489 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun logAnalyticsEvent(slotNum: Int, type: String, durationSec: Long) {
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val dateKey = dateFormat.format(Date())
-        val existingLog = prefs.getString("log_$dateKey", "") ?: ""
-        val timeFormatted = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
-        
-        val newEntry = "Slot $slotNum | $type | Duration: ${durationSec}s | At: $timeFormatted\n"
-        prefs.edit().putString("log_$dateKey", existingLog + newEntry).apply()
+    /**
+     * Periodic 1-second tracker that records accurate Present seconds into JSON
+     */
+    private fun startPeriodicTimeTracker() {
+        val trackerHandler = Handler(Looper.getMainLooper())
+        trackerHandler.post(object : Runnable {
+            override fun run() {
+                if (currentActiveSlot != -1 && isPersonCurrentlyPresent) {
+                    incrementPresentTime(currentActiveSlot, 1)
+                }
+                trackerHandler.postDelayed(this, 1000)
+            }
+        })
     }
 
-    private fun showEventsDialog() {
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val todayKey = dateFormat.format(Date())
-        val logData = prefs.getString("log_$todayKey", "No activity logs recorded for today yet.") ?: "No logs."
-
-        val dayName = SimpleDateFormat("EEEE, MMM dd, yyyy", Locale.getDefault()).format(Date())
-
-        val scrollView = ScrollView(this).apply {
-            setPadding(40, 20, 40, 20)
+    private fun stopAlarmAndFinishAbsence() {
+        if (mediaPlayer?.isPlaying == true) {
+            mediaPlayer?.pause()
+            mediaPlayer?.seekTo(0)
         }
-        val tvLog = TextView(this).apply {
-            text = "📅 Date & Day: $dayName\n\n--- ACTIVITY LOG ---\n\n$logData"
-            textSize = 14f
-            setTextColor(Color.BLACK)
-            setLineSpacing(4f, 1.2f)
-        }
-        scrollView.addView(tvLog)
-
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
-            .setTitle("📊 Study Events & Analytics")
-            .setView(scrollView)
-            .setPositiveButton("Close", null)
-            .setNeutralButton("Clear Logs") { _, _ ->
-                prefs.edit().remove("log_$todayKey").apply()
-                Toast.makeText(this, "Logs Cleared for Today", Toast.LENGTH_SHORT).show()
+        if (isAlarmCurrentlyTracking) {
+            val endMs = System.currentTimeMillis()
+            val durationSec = (endMs - alarmTriggerStartMs) / 1000
+            if (durationSec > 0 && currentActiveSlot != -1) {
+                recordAbsentInterval(currentActiveSlot, alarmTriggerStartMs, endMs, durationSec)
             }
+            isAlarmCurrentlyTracking = false
+            alarmTriggerStartMs = 0L
+        }
+    }
+
+    // ==========================================
+    // DATA STORAGE & ANALYTICS JSON ENGINE
+    // ==========================================
+
+    private fun getTodayDateKey(): String {
+        return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    }
+
+    private fun getTodayDisplayDay(): String {
+        return SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault()).format(Date())
+    }
+
+    private fun getDayJson(dateKey: String): JSONObject {
+        val raw = prefs.getString("event_data_$dateKey", null)
+        return if (raw != null) JSONObject(raw) else {
+            JSONObject().apply {
+                put("date", dateKey)
+                put("dayName", SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault()).format(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(dateKey) ?: Date()))
+                put("slots", JSONObject())
+            }
+        }
+    }
+
+    private fun saveDayJson(dateKey: String, json: JSONObject) {
+        prefs.edit().putString("event_data_$dateKey", json.toString()).apply()
+
+        // Register date in global set
+        val existingDates = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
+        val newSet = HashSet(existingDates)
+        newSet.add(dateKey)
+        prefs.edit().putStringSet("event_dates_set", newSet).apply()
+    }
+
+    private fun incrementPresentTime(slotNum: Int, sec: Long) {
+        val dateKey = getTodayDateKey()
+        val json = getDayJson(dateKey)
+        val slots = json.optJSONObject("slots") ?: JSONObject()
+        val slotObj = slots.optJSONObject(slotNum.toString()) ?: JSONObject().apply {
+            put("presentSec", 0L)
+            put("absentSec", 0L)
+            put("absences", JSONArray())
+        }
+
+        val currentPresent = slotObj.optLong("presentSec", 0L)
+        slotObj.put("presentSec", currentPresent + sec)
+        slots.put(slotNum.toString(), slotObj)
+        json.put("slots", slots)
+        saveDayJson(dateKey, json)
+    }
+
+    private fun recordAbsentInterval(slotNum: Int, startMs: Long, endMs: Long, durationSec: Long) {
+        val dateKey = getTodayDateKey()
+        val json = getDayJson(dateKey)
+        val slots = json.optJSONObject("slots") ?: JSONObject()
+        val slotObj = slots.optJSONObject(slotNum.toString()) ?: JSONObject().apply {
+            put("presentSec", 0L)
+            put("absentSec", 0L)
+            put("absences", JSONArray())
+        }
+
+        val currentAbsent = slotObj.optLong("absentSec", 0L)
+        slotObj.put("absentSec", currentAbsent + durationSec)
+
+        val timeFormat = SimpleDateFormat("hh:mm:ss a", Locale.getDefault())
+        val startStr = timeFormat.format(Date(startMs))
+        val endStr = timeFormat.format(Date(endMs))
+
+        val item = JSONObject().apply {
+            put("start", startStr)
+            put("end", endStr)
+            put("durationSec", durationSec)
+        }
+
+        val absences = slotObj.optJSONArray("absences") ?: JSONArray()
+        absences.put(item)
+        slotObj.put("absences", absences)
+
+        slots.put(slotNum.toString(), slotObj)
+        json.put("slots", slots)
+        saveDayJson(dateKey, json)
+    }
+
+    // ==========================================
+    // MULTI-LEVEL EVENTS UI (HIERARCHICAL)
+    // ==========================================
+
+    /**
+     * LEVEL 1: List of all Recorded Dates & Days
+     */
+    private fun showEventsLevel1DateList() {
+        val dateSet = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
+        val sortedDates = dateSet.toMutableList()
+        val todayKey = getTodayDateKey()
+        if (!sortedDates.contains(todayKey)) {
+            sortedDates.add(todayKey)
+        }
+        sortedDates.sortDescending()
+
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 20, 30, 20)
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        val tvTitle = TextView(this).apply {
+            text = "📅 Study Events - Select Date"
+            textSize = 16f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 15)
+        }
+        dialogView.addView(tvTitle)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 400)
+        }
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        for (dateKey in sortedDates) {
+            val dayJson = getDayJson(dateKey)
+            val dayName = dayJson.optString("dayName", dateKey)
+
+            val btnDate = Button(this).apply {
+                text = if (dateKey == todayKey) "📍 Today ($dayName)" else "📅 $dayName"
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#1E293B"))
+                setAllCaps(false)
+                setPadding(20, 15, 20, 15)
+                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                params.setMargins(0, 6, 0, 6)
+                layoutParams = params
+                setOnClickListener {
+                    showEventsLevel2SlotMenu(dateKey, dayName)
+                }
+            }
+            listContainer.addView(btnDate)
+        }
+        scroll.addView(listContainer)
+        dialogView.addView(scroll)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+            .setView(dialogView)
+            .setPositiveButton("Close", null)
             .show()
+    }
+
+    /**
+     * LEVEL 2: Slots Menu for Chosen Date + All-Day Summary
+     */
+    private fun showEventsLevel2SlotMenu(dateKey: String, dayName: String) {
+        val dayJson = getDayJson(dateKey)
+        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
+
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 20, 30, 20)
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        val tvTitle = TextView(this).apply {
+            text = "📅 $dayName\nSelect Slot to view Data Log:"
+            textSize = 15f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 15)
+        }
+        dialogView.addView(tvTitle)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 450)
+        }
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        for (i in 1..5) {
+            val slotData = slotsObj.optJSONObject(i.toString())
+            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
+            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
+
+            val def = getDefaultSlotTimes(i)
+            val startH = prefs.getInt("slot_${i}_start_h", def.startH)
+            val startM = prefs.getInt("slot_${i}_start_m", def.startM)
+            val endH = prefs.getInt("slot_${i}_end_h", def.endH)
+            val endM = prefs.getInt("slot_${i}_end_m", def.endM)
+            val timeRange = "${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
+
+            val btnSlot = Button(this).apply {
+                text = "📘 Slot $i ($timeRange)\nPresent: ${formatDuration(pSec)} | Absent: ${formatDuration(aSec)}"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#1E293B"))
+                setAllCaps(false)
+                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                params.setMargins(0, 6, 0, 6)
+                layoutParams = params
+                setOnClickListener {
+                    showEventsLevel3SlotDetail(dateKey, dayName, i, timeRange)
+                }
+            }
+            listContainer.addView(btnSlot)
+        }
+
+        // ALL-DAY FULL REPORT BUTTON
+        val btnAllDay = Button(this).apply {
+            text = "🌟 📊 All-Day Full Results (All Slots)"
+            textSize = 13f
+            setTextColor(Color.BLACK)
+            setBackgroundColor(Color.parseColor("#F59E0B"))
+            setTypeface(null, Typeface.BOLD)
+            setAllCaps(false)
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.setMargins(0, 14, 0, 6)
+            layoutParams = params
+            setOnClickListener {
+                showEventsLevel3AllDaySummary(dateKey, dayName)
+            }
+        }
+        listContainer.addView(btnAllDay)
+
+        scroll.addView(listContainer)
+        dialogView.addView(scroll)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+            .setView(dialogView)
+            .setPositiveButton("Back") { _, _ -> showEventsLevel1DateList() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    /**
+     * LEVEL 3: Individual Slot Detailed Data Log
+     */
+    private fun showEventsLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int, timeRange: String) {
+        val dayJson = getDayJson(dateKey)
+        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
+        val slotData = slotsObj.optJSONObject(slotNum.toString())
+
+        val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
+        val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
+        val absences = slotData?.optJSONArray("absences") ?: JSONArray()
+
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 20, 30, 20)
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        val tvHeader = TextView(this).apply {
+            text = "📘 Slot $slotNum Data Log\n$dayName ($timeRange)"
+            textSize = 15f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 12)
+        }
+        dialogView.addView(tvHeader)
+
+        // Summary Card
+        val cardSummary = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 15, 20, 15)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+        }
+
+        val tvPresent = TextView(this).apply {
+            text = "🟢 Total Present Time: ${formatDuration(pSec)}"
+            textSize = 14f
+            setTextColor(Color.parseColor("#22C55E"))
+            setTypeface(null, Typeface.BOLD)
+        }
+        val tvAbsent = TextView(this).apply {
+            text = "🔴 Total Absent Time: ${formatDuration(aSec)}"
+            textSize = 14f
+            setTextColor(Color.parseColor("#EF4444"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 6, 0, 0)
+        }
+        cardSummary.addView(tvPresent)
+        cardSummary.addView(tvAbsent)
+        dialogView.addView(cardSummary)
+
+        // Intervals Log Section
+        val tvLogTitle = TextView(this).apply {
+            text = "⏱ Detailed Absent Intervals (Alarm Rings):"
+            textSize = 13f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 14, 0, 6)
+        }
+        dialogView.addView(tvLogTitle)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 300)
+        }
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        if (absences.length() == 0) {
+            val tvEmpty = TextView(this).apply {
+                text = "🎉 Perfect Session! No unexcused absences recorded."
+                setTextColor(Color.GRAY)
+                textSize = 12f
+                setPadding(0, 10, 0, 10)
+            }
+            listContainer.addView(tvEmpty)
+        } else {
+            for (j in 0 until absences.length()) {
+                val item = absences.getJSONObject(j)
+                val start = item.optString("start")
+                val end = item.optString("end")
+                val dur = item.optLong("durationSec")
+
+                val tvItem = TextView(this).apply {
+                    text = "${j + 1}. $start ➔ $end\n    Duration: ${formatDuration(dur)}"
+                    textSize = 12f
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#1E293B"))
+                    setPadding(15, 10, 15, 10)
+                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    params.setMargins(0, 4, 0, 4)
+                    layoutParams = params
+                }
+                listContainer.addView(tvItem)
+            }
+        }
+        scroll.addView(listContainer)
+        dialogView.addView(scroll)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+            .setView(dialogView)
+            .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    /**
+     * LEVEL 3: All-Day Summary Report (All Slots Combined)
+     */
+    private fun showEventsLevel3AllDaySummary(dateKey: String, dayName: String) {
+        val dayJson = getDayJson(dateKey)
+        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
+
+        var totalPresentDay = 0L
+        var totalAbsentDay = 0L
+
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 20, 30, 20)
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+
+        val tvTitle = TextView(this).apply {
+            text = "🌟 ALL-DAY SUMMARY REPORT\n$dayName"
+            textSize = 16f
+            setTextColor(Color.parseColor("#F59E0B"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 10)
+        }
+        dialogView.addView(tvTitle)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 450)
+        }
+        val contentContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        for (i in 1..5) {
+            val slotData = slotsObj.optJSONObject(i.toString())
+            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
+            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
+            totalPresentDay += pSec
+            totalAbsentDay += aSec
+
+            val def = getDefaultSlotTimes(i)
+            val startH = prefs.getInt("slot_${i}_start_h", def.startH)
+            val startM = prefs.getInt("slot_${i}_start_m", def.startM)
+            val endH = prefs.getInt("slot_${i}_end_h", def.endH)
+            val endM = prefs.getInt("slot_${i}_end_m", def.endM)
+            val timeRange = "${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
+
+            val cardSlot = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(16, 12, 16, 12)
+                setBackgroundColor(Color.parseColor("#1E293B"))
+                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                params.setMargins(0, 4, 0, 4)
+                layoutParams = params
+            }
+
+            val tvSlotTitle = TextView(this).apply {
+                text = "Slot $i: $timeRange"
+                textSize = 13f
+                setTextColor(Color.parseColor("#38BDF8"))
+                setTypeface(null, Typeface.BOLD)
+            }
+            val tvSlotStats = TextView(this).apply {
+                text = "Present: ${formatDuration(pSec)} | Absent: ${formatDuration(aSec)}"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+            }
+            cardSlot.addView(tvSlotTitle)
+            cardSlot.addView(tvSlotStats)
+
+            val absences = slotData?.optJSONArray("absences") ?: JSONArray()
+            if (absences.length() > 0) {
+                for (j in 0 until absences.length()) {
+                    val item = absences.getJSONObject(j)
+                    val tvSub = TextView(this).apply {
+                        text = "  • ${item.optString("start")} ➔ ${item.optString("end")} (${formatDuration(item.optLong("durationSec"))})"
+                        textSize = 11f
+                        setTextColor(Color.parseColor("#EF4444"))
+                    }
+                    cardSlot.addView(tvSub)
+                }
+            }
+            contentContainer.addView(cardSlot)
+        }
+
+        // Grand Total Header at Top
+        val tvGrandTotal = TextView(this).apply {
+            text = "📊 GRAND TOTAL FOR DAY:\n• Total Study (Present): ${formatDuration(totalPresentDay)}\n• Total Away (Absent): ${formatDuration(totalAbsentDay)}"
+            textSize = 13f
+            setTextColor(Color.parseColor("#22C55E"))
+            setTypeface(null, Typeface.BOLD)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            setPadding(16, 12, 16, 12)
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.setMargins(0, 0, 0, 8)
+            layoutParams = params
+        }
+        contentContainer.addView(tvGrandTotal, 0)
+
+        scroll.addView(contentContainer)
+        dialogView.addView(scroll)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+            .setView(dialogView)
+            .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun formatDuration(sec: Long): String {
+        val h = sec / 3600
+        val m = (sec % 3600) / 60
+        val s = sec % 60
+        return if (h > 0) String.format("%02dh %02dm %02ds", h, m, s)
+        else String.format("%02dm %02ds", m, s)
     }
 
     private fun initAlarmSound() {
@@ -570,13 +1042,6 @@ class MainActivity : AppCompatActivity() {
         if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
     }
 
-    private fun stopAlarm() {
-        if (mediaPlayer?.isPlaying == true) {
-            mediaPlayer?.pause()
-            mediaPlayer?.seekTo(0)
-        }
-    }
-
     private fun showUnlockPinDialog() {
         val input = EditText(this).apply {
             hint = "Enter PIN"
@@ -593,7 +1058,7 @@ class MainActivity : AppCompatActivity() {
                 if (input.text.toString().trim() == (prefs.getString("user_pin", "1234") ?: "1234")) {
                     stealthOverlay.visibility = View.GONE
                     dashboardLayout.visibility = View.VISIBLE
-                    stopAlarm()
+                    stopAlarmAndFinishAbsence()
                     Toast.makeText(this, "Unlocked", Toast.LENGTH_SHORT).show()
                 } else Toast.makeText(this, "Incorrect PIN", Toast.LENGTH_SHORT).show()
             }
