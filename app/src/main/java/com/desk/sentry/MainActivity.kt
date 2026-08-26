@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -56,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     // Anti-Ghosting Counters
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
-    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 10
+    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 8
     private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6
 
     // Real-Time Analytics State
@@ -408,11 +409,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * ROBUST STUDY & WRITING POSE DETECTOR
-     * Accurately detects user sitting, reading, or bending down to write on desk!
+     * BENDING & WRITING POSE DETECTOR (NO COMPILATION ERROR)
      */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val minConfidence = 0.45f
+        val minConfidence = 0.40f
 
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
@@ -421,8 +421,8 @@ class MainActivity : AppCompatActivity() {
         val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
         val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
         val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
-        val mouthLeft = pose.getPoseLandmark(PoseLandmark.MOUTH_LEFT)
-        val mouthRight = pose.getPoseLandmark(PoseLandmark.MOUTH_RIGHT)
+        val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
+        val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
 
         val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
         val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
@@ -436,13 +436,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.35f) ||
-                (leftEye != null && leftEye.inFrameLikelihood >= 0.35f) ||
-                (rightEye != null && rightEye.inFrameLikelihood >= 0.35f) ||
-                (leftEar != null && leftEar.inFrameLikelihood >= 0.35f) ||
-                (rightEar != null && rightEar.inFrameLikelihood >= 0.35f) ||
-                (mouthLeft != null && mouthLeft.inFrameLikelihood >= 0.35f) ||
-                (mouthRight != null && mouthRight.inFrameLikelihood >= 0.35f)
+        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.30f) ||
+                (leftEye != null && leftEye.inFrameLikelihood >= 0.30f) ||
+                (rightEye != null && rightEye.inFrameLikelihood >= 0.30f) ||
+                (leftEar != null && leftEar.inFrameLikelihood >= 0.30f) ||
+                (rightEar != null && rightEar.inFrameLikelihood >= 0.30f) ||
+                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.30f) ||
+                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.30f)
 
         val refY = if (hasLeftShoulder && hasRightShoulder) {
             (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
@@ -539,9 +539,6 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    /**
-     * Periodic 1-second tracker that records accurate Present seconds into JSON
-     */
     private fun startPeriodicTimeTracker() {
         val trackerHandler = Handler(Looper.getMainLooper())
         trackerHandler.post(object : Runnable {
@@ -578,10 +575,6 @@ class MainActivity : AppCompatActivity() {
         return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     }
 
-    private fun getTodayDisplayDay(): String {
-        return SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault()).format(Date())
-    }
-
     private fun getDayJson(dateKey: String): JSONObject {
         val raw = prefs.getString("event_data_$dateKey", null)
         return if (raw != null) JSONObject(raw) else {
@@ -596,7 +589,6 @@ class MainActivity : AppCompatActivity() {
     private fun saveDayJson(dateKey: String, json: JSONObject) {
         prefs.edit().putString("event_data_$dateKey", json.toString()).apply()
 
-        // Register date in global set
         val existingDates = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
         val newSet = HashSet(existingDates)
         newSet.add(dateKey)
@@ -653,13 +645,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==========================================
-    // MULTI-LEVEL EVENTS UI (HIERARCHICAL)
+    // MULTI-LEVEL EVENTS UI (PORTRAIT ORIENTED)
     // ==========================================
 
+    private fun switchToPortraitForEvents() {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+
+    private fun restoreLandscapeDeskMode() {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    }
+
     /**
-     * LEVEL 1: List of all Recorded Dates & Days
+     * LEVEL 1: List of all Recorded Dates & Days (Portrait Mode)
      */
     private fun showEventsLevel1DateList() {
+        switchToPortraitForEvents()
+
         val dateSet = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
         val sortedDates = dateSet.toMutableList()
         val todayKey = getTodayDateKey()
@@ -670,13 +672,13 @@ class MainActivity : AppCompatActivity() {
 
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
+            setPadding(30, 25, 30, 25)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
 
         val tvTitle = TextView(this).apply {
-            text = "📅 Study Events - Select Date"
-            textSize = 16f
+            text = "📅 Study Events Log"
+            textSize = 18f
             setTextColor(Color.parseColor("#38BDF8"))
             setTypeface(null, Typeface.BOLD)
             setPadding(0, 0, 0, 15)
@@ -684,7 +686,7 @@ class MainActivity : AppCompatActivity() {
         dialogView.addView(tvTitle)
 
         val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 400)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800)
         }
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -696,13 +698,13 @@ class MainActivity : AppCompatActivity() {
 
             val btnDate = Button(this).apply {
                 text = if (dateKey == todayKey) "📍 Today ($dayName)" else "📅 $dayName"
-                textSize = 13f
+                textSize = 14f
                 setTextColor(Color.WHITE)
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 setAllCaps(false)
-                setPadding(20, 15, 20, 15)
+                setPadding(20, 20, 20, 20)
                 val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 6, 0, 6)
+                params.setMargins(0, 8, 0, 8)
                 layoutParams = params
                 setOnClickListener {
                     showEventsLevel2SlotMenu(dateKey, dayName)
@@ -713,14 +715,17 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(listContainer)
         dialogView.addView(scroll)
 
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
             .setView(dialogView)
-            .setPositiveButton("Close", null)
-            .show()
+            .setPositiveButton("Close") { _, _ -> restoreLandscapeDeskMode() }
+            .create()
+
+        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
+        dialog.show()
     }
 
     /**
-     * LEVEL 2: Slots Menu for Chosen Date + All-Day Summary
+     * LEVEL 2: Slots Menu for Chosen Date + All-Day Summary (Portrait Mode)
      */
     private fun showEventsLevel2SlotMenu(dateKey: String, dayName: String) {
         val dayJson = getDayJson(dateKey)
@@ -728,13 +733,13 @@ class MainActivity : AppCompatActivity() {
 
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
+            setPadding(30, 25, 30, 25)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
 
         val tvTitle = TextView(this).apply {
-            text = "📅 $dayName\nSelect Slot to view Data Log:"
-            textSize = 15f
+            text = "📅 $dayName\nSelect Slot to view details:"
+            textSize = 16f
             setTextColor(Color.parseColor("#38BDF8"))
             setTypeface(null, Typeface.BOLD)
             setPadding(0, 0, 0, 15)
@@ -742,7 +747,7 @@ class MainActivity : AppCompatActivity() {
         dialogView.addView(tvTitle)
 
         val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 450)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800)
         }
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -761,13 +766,14 @@ class MainActivity : AppCompatActivity() {
             val timeRange = "${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
 
             val btnSlot = Button(this).apply {
-                text = "📘 Slot $i ($timeRange)\nPresent: ${formatDuration(pSec)} | Absent: ${formatDuration(aSec)}"
-                textSize = 12f
+                text = "📘 Slot $i ($timeRange)\n🟢 Present: ${formatDuration(pSec)} | 🔴 Absent: ${formatDuration(aSec)}"
+                textSize = 13f
                 setTextColor(Color.WHITE)
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 setAllCaps(false)
+                setPadding(15, 15, 15, 15)
                 val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 6, 0, 6)
+                params.setMargins(0, 8, 0, 8)
                 layoutParams = params
                 setOnClickListener {
                     showEventsLevel3SlotDetail(dateKey, dayName, i, timeRange)
@@ -779,13 +785,14 @@ class MainActivity : AppCompatActivity() {
         // ALL-DAY FULL REPORT BUTTON
         val btnAllDay = Button(this).apply {
             text = "🌟 📊 All-Day Full Results (All Slots)"
-            textSize = 13f
+            textSize = 14f
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.parseColor("#F59E0B"))
             setTypeface(null, Typeface.BOLD)
             setAllCaps(false)
+            setPadding(15, 18, 15, 18)
             val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 14, 0, 6)
+            params.setMargins(0, 16, 0, 8)
             layoutParams = params
             setOnClickListener {
                 showEventsLevel3AllDaySummary(dateKey, dayName)
@@ -796,15 +803,18 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(listContainer)
         dialogView.addView(scroll)
 
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
             .setView(dialogView)
             .setPositiveButton("Back") { _, _ -> showEventsLevel1DateList() }
-            .setNegativeButton("Close", null)
-            .show()
+            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
+            .create()
+
+        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
+        dialog.show()
     }
 
     /**
-     * LEVEL 3: Individual Slot Detailed Data Log
+     * LEVEL 3: Individual Slot Detailed Data Log (Portrait Mode)
      */
     private fun showEventsLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int, timeRange: String) {
         val dayJson = getDayJson(dateKey)
@@ -817,20 +827,19 @@ class MainActivity : AppCompatActivity() {
 
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
+            setPadding(30, 25, 30, 25)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
 
         val tvHeader = TextView(this).apply {
             text = "📘 Slot $slotNum Data Log\n$dayName ($timeRange)"
-            textSize = 15f
+            textSize = 16f
             setTextColor(Color.parseColor("#38BDF8"))
             setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 12)
+            setPadding(0, 0, 0, 15)
         }
         dialogView.addView(tvHeader)
 
-        // Summary Card
         val cardSummary = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(20, 15, 20, 15)
@@ -839,32 +848,31 @@ class MainActivity : AppCompatActivity() {
 
         val tvPresent = TextView(this).apply {
             text = "🟢 Total Present Time: ${formatDuration(pSec)}"
-            textSize = 14f
+            textSize = 15f
             setTextColor(Color.parseColor("#22C55E"))
             setTypeface(null, Typeface.BOLD)
         }
         val tvAbsent = TextView(this).apply {
             text = "🔴 Total Absent Time: ${formatDuration(aSec)}"
-            textSize = 14f
+            textSize = 15f
             setTextColor(Color.parseColor("#EF4444"))
             setTypeface(null, Typeface.BOLD)
-            setPadding(0, 6, 0, 0)
+            setPadding(0, 8, 0, 0)
         }
         cardSummary.addView(tvPresent)
         cardSummary.addView(tvAbsent)
         dialogView.addView(cardSummary)
 
-        // Intervals Log Section
         val tvLogTitle = TextView(this).apply {
             text = "⏱ Detailed Absent Intervals (Alarm Rings):"
-            textSize = 13f
+            textSize = 14f
             setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 14, 0, 6)
+            setPadding(0, 16, 0, 8)
         }
         dialogView.addView(tvLogTitle)
 
         val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 300)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 500)
         }
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -874,8 +882,8 @@ class MainActivity : AppCompatActivity() {
             val tvEmpty = TextView(this).apply {
                 text = "🎉 Perfect Session! No unexcused absences recorded."
                 setTextColor(Color.GRAY)
-                textSize = 12f
-                setPadding(0, 10, 0, 10)
+                textSize = 13f
+                setPadding(0, 15, 0, 15)
             }
             listContainer.addView(tvEmpty)
         } else {
@@ -887,12 +895,12 @@ class MainActivity : AppCompatActivity() {
 
                 val tvItem = TextView(this).apply {
                     text = "${j + 1}. $start ➔ $end\n    Duration: ${formatDuration(dur)}"
-                    textSize = 12f
+                    textSize = 13f
                     setTextColor(Color.WHITE)
                     setBackgroundColor(Color.parseColor("#1E293B"))
-                    setPadding(15, 10, 15, 10)
+                    setPadding(15, 12, 15, 12)
                     val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    params.setMargins(0, 4, 0, 4)
+                    params.setMargins(0, 6, 0, 6)
                     layoutParams = params
                 }
                 listContainer.addView(tvItem)
@@ -901,15 +909,18 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(listContainer)
         dialogView.addView(scroll)
 
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
             .setView(dialogView)
             .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
-            .setNegativeButton("Close", null)
-            .show()
+            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
+            .create()
+
+        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
+        dialog.show()
     }
 
     /**
-     * LEVEL 3: All-Day Summary Report (All Slots Combined)
+     * LEVEL 3: All-Day Summary Report (Portrait Mode)
      */
     private fun showEventsLevel3AllDaySummary(dateKey: String, dayName: String) {
         val dayJson = getDayJson(dateKey)
@@ -920,21 +931,21 @@ class MainActivity : AppCompatActivity() {
 
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
+            setPadding(30, 25, 30, 25)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
 
         val tvTitle = TextView(this).apply {
             text = "🌟 ALL-DAY SUMMARY REPORT\n$dayName"
-            textSize = 16f
+            textSize = 17f
             setTextColor(Color.parseColor("#F59E0B"))
             setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 10)
+            setPadding(0, 0, 0, 15)
         }
         dialogView.addView(tvTitle)
 
         val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 450)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 700)
         }
         val contentContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -956,22 +967,22 @@ class MainActivity : AppCompatActivity() {
 
             val cardSlot = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(16, 12, 16, 12)
+                setPadding(18, 14, 18, 14)
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 4, 0, 4)
+                params.setMargins(0, 6, 0, 6)
                 layoutParams = params
             }
 
             val tvSlotTitle = TextView(this).apply {
                 text = "Slot $i: $timeRange"
-                textSize = 13f
+                textSize = 14f
                 setTextColor(Color.parseColor("#38BDF8"))
                 setTypeface(null, Typeface.BOLD)
             }
             val tvSlotStats = TextView(this).apply {
                 text = "Present: ${formatDuration(pSec)} | Absent: ${formatDuration(aSec)}"
-                textSize = 12f
+                textSize = 13f
                 setTextColor(Color.WHITE)
             }
             cardSlot.addView(tvSlotTitle)
@@ -983,7 +994,7 @@ class MainActivity : AppCompatActivity() {
                     val item = absences.getJSONObject(j)
                     val tvSub = TextView(this).apply {
                         text = "  • ${item.optString("start")} ➔ ${item.optString("end")} (${formatDuration(item.optLong("durationSec"))})"
-                        textSize = 11f
+                        textSize = 12f
                         setTextColor(Color.parseColor("#EF4444"))
                     }
                     cardSlot.addView(tvSub)
@@ -992,16 +1003,15 @@ class MainActivity : AppCompatActivity() {
             contentContainer.addView(cardSlot)
         }
 
-        // Grand Total Header at Top
         val tvGrandTotal = TextView(this).apply {
             text = "📊 GRAND TOTAL FOR DAY:\n• Total Study (Present): ${formatDuration(totalPresentDay)}\n• Total Away (Absent): ${formatDuration(totalAbsentDay)}"
-            textSize = 13f
+            textSize = 14f
             setTextColor(Color.parseColor("#22C55E"))
             setTypeface(null, Typeface.BOLD)
             setBackgroundColor(Color.parseColor("#1E293B"))
-            setPadding(16, 12, 16, 12)
+            setPadding(18, 14, 18, 14)
             val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 0, 0, 8)
+            params.setMargins(0, 0, 0, 10)
             layoutParams = params
         }
         contentContainer.addView(tvGrandTotal, 0)
@@ -1009,11 +1019,14 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(contentContainer)
         dialogView.addView(scroll)
 
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
             .setView(dialogView)
             .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
-            .setNegativeButton("Close", null)
-            .show()
+            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
+            .create()
+
+        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
+        dialog.show()
     }
 
     private fun formatDuration(sec: Long): String {
