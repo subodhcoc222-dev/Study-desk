@@ -114,10 +114,10 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
 
-        // START 24/7 BACKGROUND SERVICE IF ENABLED
+        // START 24/7 SERVICE & PERMISSIONS
+        checkOverlayAndBatteryPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
             startPersistentBackgroundService()
-            requestBatteryOptimizationExemption()
         }
 
         initViews()
@@ -141,6 +141,39 @@ class MainActivity : AppCompatActivity() {
         startPeriodicTimeTracker()
     }
 
+    private fun checkOverlayAndBatteryPermissions() {
+        // 1. Overlay Permission (Display over other apps)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                    Toast.makeText(this, "Enable 'Appear on top / Overlay' for 24/7 Protection", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        // 2. Battery Optimization Bypass
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     private fun startPersistentBackgroundService() {
         val serviceIntent = Intent(this, SentryService::class.java).apply {
             action = SentryService.ACTION_START
@@ -157,23 +190,6 @@ class MainActivity : AppCompatActivity() {
             action = SentryService.ACTION_STOP
         }
         startService(serviceIntent)
-    }
-
-    @SuppressLint("BatteryLife")
-    private fun requestBatteryOptimizationExemption() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
     }
 
     override fun onResume() {
@@ -240,7 +256,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 24/7 BACKGROUND GUARD TOGGLE WITH PIN VERIFICATION
         switchBgGuard.setOnClickListener {
             val targetState = switchBgGuard.isChecked
             switchBgGuard.isChecked = !targetState
@@ -250,11 +265,10 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putBoolean("bg_guard_enabled", targetState).apply()
                 if (targetState) {
                     startPersistentBackgroundService()
-                    requestBatteryOptimizationExemption()
-                    Toast.makeText(this, "24/7 Background Guard Activated!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "24/7 Guard Activated!", Toast.LENGTH_SHORT).show()
                 } else {
                     stopPersistentBackgroundService()
-                    Toast.makeText(this, "24/7 Background Guard Stopped!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "24/7 Guard Stopped!", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -344,7 +358,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Set Master Security PIN")
-            .setMessage("Welcome to Desk Sentry! Please create your master PIN. Give this PIN to your accountability partner/friend.")
+            .setMessage("Welcome to Desk Sentry! Please create your master PIN. Give this PIN to your accountability partner.")
             .setView(container)
             .setCancelable(false)
             .setPositiveButton("Save PIN", null)
