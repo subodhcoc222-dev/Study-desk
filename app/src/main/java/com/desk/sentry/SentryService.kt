@@ -8,6 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -23,6 +26,7 @@ class SentryService : Service() {
     private lateinit var prefs: SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
+    private var bgMediaPlayer: MediaPlayer? = null
 
     companion object {
         const val ACTION_START = "ACTION_START"
@@ -36,11 +40,15 @@ class SentryService : Service() {
         createNotificationChannel()
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DeskSentry::BgLock").apply {
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "DeskSentry::BgLock"
+        ).apply {
             setReferenceCounted(false)
             acquire(24 * 60 * 60 * 1000L)
         }
 
+        initBackgroundAlarm()
         startForeground(NOTIFICATION_ID, buildForegroundNotification("24/7 Desk Guard Active"))
         startWatchdogLoop()
     }
@@ -54,18 +62,23 @@ class SentryService : Service() {
         return START_STICKY
     }
 
-    private fun stopForegroundSafely() {
-        handler.removeCallbacksAndMessages(null)
+    private fun initBackgroundAlarm() {
         try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
+            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            bgMediaPlayer = MediaPlayer().apply {
+                setDataSource(applicationContext, alertUri)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                isLooping = true
+                prepare()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
         }
     }
 
@@ -73,10 +86,10 @@ class SentryService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Desk Sentry Persistent Service",
-                NotificationManager.IMPORTANCE_LOW
+                "Desk Sentry Persistent Guard",
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Keeps Desk Sentry AI alive in the background for scheduled sessions."
+                description = "Enforces study sessions and sounds alarms."
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
@@ -96,15 +109,19 @@ class SentryService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Desk Sentry Active (No-Negotiation Mode)")
+            .setContentTitle("Desk Sentry (No-Negotiation Mode)")
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
     }
 
+    /**
+     * Aggressive 1-Second Watchdog Loop
+     * If user presses Home or goes to background during study hours, pulls MainActivity to front immediately!
+     */
     private fun startWatchdogLoop() {
         handler.post(object : Runnable {
             override fun run() {
@@ -118,15 +135,21 @@ class SentryService : Service() {
                 val activeSlot = getActiveStudySlot()
 
                 if (activeSlot != -1) {
+                    // Study time is active!
                     if (!isMainActivityVisible) {
+                        // Bring MainActivity to screen immediately
                         val intent = Intent(applicationContext, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            )
                         }
                         startActivity(intent)
                     }
                 }
 
-                handler.postDelayed(this, 5000)
+                handler.postDelayed(this, 1000) // Checks every 1 second
             }
         })
     }
@@ -162,6 +185,26 @@ class SentryService : Service() {
             }
         }
         return -1
+    }
+
+    private fun stopForegroundSafely() {
+        handler.removeCallbacksAndMessages(null)
+        try {
+            if (bgMediaPlayer?.isPlaying == true) {
+                bgMediaPlayer?.stop()
+                bgMediaPlayer?.release()
+                bgMediaPlayer = null
+            }
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
     }
 
     override fun onDestroy() {
