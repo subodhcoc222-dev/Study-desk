@@ -8,10 +8,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -107,6 +105,11 @@ class MainActivity : AppCompatActivity() {
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
+        // Check if Master PIN is set (First-time launch check)
+        if (!prefs.contains("user_pin")) {
+            showFirstTimeSetPinDialog()
+        }
+
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -145,14 +148,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        switchMasterSentry.setOnCheckedChangeListener { _, isChecked ->
-            isSentryArmed = isChecked
-            if (!isChecked) stopAlarmAndFinishAbsence()
+        // Protected Switch
+        switchMasterSentry.setOnClickListener {
+            val targetState = switchMasterSentry.isChecked
+            switchMasterSentry.isChecked = !targetState // Revert temporarily until PIN verified
+            requirePinVerification("Modify Master Sentry State") {
+                switchMasterSentry.isChecked = targetState
+                isSentryArmed = targetState
+                if (!targetState) stopAlarmAndFinishAbsence()
+            }
         }
 
-        switchAlwaysActive.setOnCheckedChangeListener { _, isChecked ->
-            isAlwaysActiveMode = isChecked
-            lastSeenTimestamp = System.currentTimeMillis()
+        switchAlwaysActive.setOnClickListener {
+            val targetState = switchAlwaysActive.isChecked
+            switchAlwaysActive.isChecked = !targetState
+            requirePinVerification("Toggle Override Mode") {
+                switchAlwaysActive.isChecked = targetState
+                isAlwaysActiveMode = targetState
+                lastSeenTimestamp = System.currentTimeMillis()
+            }
         }
 
         btnFlipCamera.setOnClickListener {
@@ -161,26 +175,48 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnOpenEvents.setOnClickListener {
-            showEventsLevel1DateList()
+            // Launch Full Screen Portrait Events Activity
+            startActivity(Intent(this, EventsActivity::class.java))
         }
 
-        rgGracePeriod.setOnCheckedChangeListener { _, checkedId ->
-            absenceThresholdMs = when (checkedId) {
-                R.id.rb30s -> 30000L
-                R.id.rb1m -> 60000L
-                R.id.rb5m -> 300000L
-                else -> 180000L
+        // Grace Period Radio Buttons PIN Interception
+        for (i in 0 until rgGracePeriod.childCount) {
+            val rb = rgGracePeriod.getChildAt(i) as? RadioButton
+            rb?.setOnClickListener {
+                requirePinVerification("Change Away Grace Period") {
+                    absenceThresholdMs = when (rb.id) {
+                        R.id.rb30s -> 30000L
+                        R.id.rb1m -> 60000L
+                        R.id.rb5m -> 300000L
+                        else -> 180000L
+                    }
+                    rgGracePeriod.check(rb.id)
+                }
             }
         }
 
+        // Slots PIN Interception
         for (holder in slotViews) {
-            holder.setButton.setOnClickListener { showComprehensiveSlotDialog(holder.slotNum) }
-            holder.checkBox.setOnCheckedChangeListener { _, isChecked ->
-                prefs.edit().putBoolean("slot_${holder.slotNum}_enabled", isChecked).apply()
+            holder.setButton.setOnClickListener {
+                requirePinVerification("Edit Slot ${holder.slotNum} Schedule") {
+                    showComprehensiveSlotDialog(holder.slotNum)
+                }
+            }
+            holder.checkBox.setOnClickListener {
+                val target = holder.checkBox.isChecked
+                holder.checkBox.isChecked = !target
+                requirePinVerification("Enable/Disable Slot ${holder.slotNum}") {
+                    holder.checkBox.isChecked = target
+                    prefs.edit().putBoolean("slot_${holder.slotNum}_enabled", target).apply()
+                }
             }
         }
 
-        btnActivateAdmin.setOnClickListener { requestDeviceAdmin() }
+        btnActivateAdmin.setOnClickListener {
+            requirePinVerification("Enable Device Admin Protection") {
+                requestDeviceAdmin()
+            }
+        }
 
         btnEnterStealth.setOnClickListener {
             stealthOverlay.visibility = View.VISIBLE
@@ -195,7 +231,9 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
-        btnChangePin.setOnClickListener { showChangePinDialog() }
+        btnChangePin.setOnClickListener {
+            showChangePinTwoStepWorkflow()
+        }
 
         btnTestAlarm.setOnClickListener {
             if (mediaPlayer?.isPlaying == true) {
@@ -207,6 +245,124 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    // ==========================================
+    // PIN VERIFICATION & MANAGEMENT SYSTEM
+    // ==========================================
+
+    private fun showFirstTimeSetPinDialog() {
+        val input = EditText(this).apply {
+            hint = "Create 4-digit Master PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+        }
+        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
+
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🔑 Set Master Security PIN")
+            .setMessage("Welcome to Desk Sentry! Please create your master PIN. This will be required to modify settings and study hours.")
+            .setView(container)
+            .setCancelable(false)
+            .setPositiveButton("Save PIN", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val pin = input.text.toString().trim()
+                if (pin.length >= 4) {
+                    prefs.edit().putString("user_pin", pin).apply()
+                    Toast.makeText(this, "Master PIN Saved Successfully!", Toast.LENGTH_SHORT).show()
+                    dialog.dismiss()
+                } else {
+                    Toast.makeText(this, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun requirePinVerification(actionDescription: String, onVerified: () -> Unit) {
+        val savedPin = prefs.getString("user_pin", "1234") ?: "1234"
+        val input = EditText(this).apply {
+            hint = "Enter Master PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+        }
+        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🔒 PIN Required")
+            .setMessage("Enter Master PIN to $actionDescription:")
+            .setView(container)
+            .setPositiveButton("Authorize") { _, _ ->
+                if (input.text.toString().trim() == savedPin) {
+                    onVerified()
+                } else {
+                    Toast.makeText(this, "Incorrect PIN! Changes not permitted.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showChangePinTwoStepWorkflow() {
+        val savedPin = prefs.getString("user_pin", "1234") ?: "1234"
+        val inputOld = EditText(this).apply {
+            hint = "Current Master PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+        }
+        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputOld) }
+
+        // STEP 1: Verify Old PIN
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🔑 Change Master PIN - Step 1/2")
+            .setMessage("Please enter your current PIN to proceed:")
+            .setView(container)
+            .setPositiveButton("Next") { _, _ ->
+                if (inputOld.text.toString().trim() == savedPin) {
+                    showNewPinPrompt()
+                } else {
+                    Toast.makeText(this, "Incorrect Current PIN!", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showNewPinPrompt() {
+        val inputNew = EditText(this).apply {
+            hint = "New 4-digit PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+        }
+        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputNew) }
+
+        // STEP 2: Enter New PIN
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🔑 Change Master PIN - Step 2/2")
+            .setMessage("Enter your new master PIN:")
+            .setView(container)
+            .setPositiveButton("Update PIN") { _, _ ->
+                val newPin = inputNew.text.toString().trim()
+                if (newPin.length >= 4) {
+                    prefs.edit().putString("user_pin", newPin).apply()
+                    Toast.makeText(this, "Master PIN updated successfully!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "PIN must be at least 4 digits!", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ==========================================
+    // STUDY SLOTS & SCHEDULE LOGIC
+    // ==========================================
 
     private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
         return when (slotNum) {
@@ -408,9 +564,6 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /**
-     * BENDING & WRITING POSE DETECTOR (NO COMPILATION ERROR)
-     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val minConfidence = 0.40f
 
@@ -568,7 +721,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==========================================
-    // DATA STORAGE & ANALYTICS JSON ENGINE
+    // DATA PERSISTENCE JSON ENGINE
     // ==========================================
 
     private fun getTodayDateKey(): String {
@@ -644,399 +797,6 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
-    // ==========================================
-    // MULTI-LEVEL EVENTS UI (PORTRAIT ORIENTED)
-    // ==========================================
-
-    private fun switchToPortraitForEvents() {
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-    }
-
-    private fun restoreLandscapeDeskMode() {
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-    }
-
-    /**
-     * LEVEL 1: List of all Recorded Dates & Days (Portrait Mode)
-     */
-    private fun showEventsLevel1DateList() {
-        switchToPortraitForEvents()
-
-        val dateSet = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
-        val sortedDates = dateSet.toMutableList()
-        val todayKey = getTodayDateKey()
-        if (!sortedDates.contains(todayKey)) {
-            sortedDates.add(todayKey)
-        }
-        sortedDates.sortDescending()
-
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 25, 30, 25)
-            setBackgroundColor(Color.parseColor("#0F172A"))
-        }
-
-        val tvTitle = TextView(this).apply {
-            text = "📅 Study Events Log"
-            textSize = 18f
-            setTextColor(Color.parseColor("#38BDF8"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        dialogView.addView(tvTitle)
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800)
-        }
-        val listContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        for (dateKey in sortedDates) {
-            val dayJson = getDayJson(dateKey)
-            val dayName = dayJson.optString("dayName", dateKey)
-
-            val btnDate = Button(this).apply {
-                text = if (dateKey == todayKey) "📍 Today ($dayName)" else "📅 $dayName"
-                textSize = 14f
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#1E293B"))
-                setAllCaps(false)
-                setPadding(20, 20, 20, 20)
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 8, 0, 8)
-                layoutParams = params
-                setOnClickListener {
-                    showEventsLevel2SlotMenu(dateKey, dayName)
-                }
-            }
-            listContainer.addView(btnDate)
-        }
-        scroll.addView(listContainer)
-        dialogView.addView(scroll)
-
-        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
-            .setView(dialogView)
-            .setPositiveButton("Close") { _, _ -> restoreLandscapeDeskMode() }
-            .create()
-
-        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
-        dialog.show()
-    }
-
-    /**
-     * LEVEL 2: Slots Menu for Chosen Date + All-Day Summary (Portrait Mode)
-     */
-    private fun showEventsLevel2SlotMenu(dateKey: String, dayName: String) {
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
-
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 25, 30, 25)
-            setBackgroundColor(Color.parseColor("#0F172A"))
-        }
-
-        val tvTitle = TextView(this).apply {
-            text = "📅 $dayName\nSelect Slot to view details:"
-            textSize = 16f
-            setTextColor(Color.parseColor("#38BDF8"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        dialogView.addView(tvTitle)
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800)
-        }
-        val listContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        for (i in 1..5) {
-            val slotData = slotsObj.optJSONObject(i.toString())
-            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-
-            val def = getDefaultSlotTimes(i)
-            val startH = prefs.getInt("slot_${i}_start_h", def.startH)
-            val startM = prefs.getInt("slot_${i}_start_m", def.startM)
-            val endH = prefs.getInt("slot_${i}_end_h", def.endH)
-            val endM = prefs.getInt("slot_${i}_end_m", def.endM)
-            val timeRange = "${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
-
-            val btnSlot = Button(this).apply {
-                text = "📘 Slot $i ($timeRange)\n🟢 Present: ${formatDuration(pSec)} | 🔴 Absent: ${formatDuration(aSec)}"
-                textSize = 13f
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#1E293B"))
-                setAllCaps(false)
-                setPadding(15, 15, 15, 15)
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 8, 0, 8)
-                layoutParams = params
-                setOnClickListener {
-                    showEventsLevel3SlotDetail(dateKey, dayName, i, timeRange)
-                }
-            }
-            listContainer.addView(btnSlot)
-        }
-
-        // ALL-DAY FULL REPORT BUTTON
-        val btnAllDay = Button(this).apply {
-            text = "🌟 📊 All-Day Full Results (All Slots)"
-            textSize = 14f
-            setTextColor(Color.BLACK)
-            setBackgroundColor(Color.parseColor("#F59E0B"))
-            setTypeface(null, Typeface.BOLD)
-            setAllCaps(false)
-            setPadding(15, 18, 15, 18)
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 16, 0, 8)
-            layoutParams = params
-            setOnClickListener {
-                showEventsLevel3AllDaySummary(dateKey, dayName)
-            }
-        }
-        listContainer.addView(btnAllDay)
-
-        scroll.addView(listContainer)
-        dialogView.addView(scroll)
-
-        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
-            .setView(dialogView)
-            .setPositiveButton("Back") { _, _ -> showEventsLevel1DateList() }
-            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
-            .create()
-
-        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
-        dialog.show()
-    }
-
-    /**
-     * LEVEL 3: Individual Slot Detailed Data Log (Portrait Mode)
-     */
-    private fun showEventsLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int, timeRange: String) {
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
-        val slotData = slotsObj.optJSONObject(slotNum.toString())
-
-        val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-        val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-        val absences = slotData?.optJSONArray("absences") ?: JSONArray()
-
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 25, 30, 25)
-            setBackgroundColor(Color.parseColor("#0F172A"))
-        }
-
-        val tvHeader = TextView(this).apply {
-            text = "📘 Slot $slotNum Data Log\n$dayName ($timeRange)"
-            textSize = 16f
-            setTextColor(Color.parseColor("#38BDF8"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        dialogView.addView(tvHeader)
-
-        val cardSummary = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 15, 20, 15)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-        }
-
-        val tvPresent = TextView(this).apply {
-            text = "🟢 Total Present Time: ${formatDuration(pSec)}"
-            textSize = 15f
-            setTextColor(Color.parseColor("#22C55E"))
-            setTypeface(null, Typeface.BOLD)
-        }
-        val tvAbsent = TextView(this).apply {
-            text = "🔴 Total Absent Time: ${formatDuration(aSec)}"
-            textSize = 15f
-            setTextColor(Color.parseColor("#EF4444"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 8, 0, 0)
-        }
-        cardSummary.addView(tvPresent)
-        cardSummary.addView(tvAbsent)
-        dialogView.addView(cardSummary)
-
-        val tvLogTitle = TextView(this).apply {
-            text = "⏱ Detailed Absent Intervals (Alarm Rings):"
-            textSize = 14f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 16, 0, 8)
-        }
-        dialogView.addView(tvLogTitle)
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 500)
-        }
-        val listContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        if (absences.length() == 0) {
-            val tvEmpty = TextView(this).apply {
-                text = "🎉 Perfect Session! No unexcused absences recorded."
-                setTextColor(Color.GRAY)
-                textSize = 13f
-                setPadding(0, 15, 0, 15)
-            }
-            listContainer.addView(tvEmpty)
-        } else {
-            for (j in 0 until absences.length()) {
-                val item = absences.getJSONObject(j)
-                val start = item.optString("start")
-                val end = item.optString("end")
-                val dur = item.optLong("durationSec")
-
-                val tvItem = TextView(this).apply {
-                    text = "${j + 1}. $start ➔ $end\n    Duration: ${formatDuration(dur)}"
-                    textSize = 13f
-                    setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.parseColor("#1E293B"))
-                    setPadding(15, 12, 15, 12)
-                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    params.setMargins(0, 6, 0, 6)
-                    layoutParams = params
-                }
-                listContainer.addView(tvItem)
-            }
-        }
-        scroll.addView(listContainer)
-        dialogView.addView(scroll)
-
-        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
-            .setView(dialogView)
-            .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
-            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
-            .create()
-
-        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
-        dialog.show()
-    }
-
-    /**
-     * LEVEL 3: All-Day Summary Report (Portrait Mode)
-     */
-    private fun showEventsLevel3AllDaySummary(dateKey: String, dayName: String) {
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
-
-        var totalPresentDay = 0L
-        var totalAbsentDay = 0L
-
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 25, 30, 25)
-            setBackgroundColor(Color.parseColor("#0F172A"))
-        }
-
-        val tvTitle = TextView(this).apply {
-            text = "🌟 ALL-DAY SUMMARY REPORT\n$dayName"
-            textSize = 17f
-            setTextColor(Color.parseColor("#F59E0B"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 15)
-        }
-        dialogView.addView(tvTitle)
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 700)
-        }
-        val contentContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        for (i in 1..5) {
-            val slotData = slotsObj.optJSONObject(i.toString())
-            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-            totalPresentDay += pSec
-            totalAbsentDay += aSec
-
-            val def = getDefaultSlotTimes(i)
-            val startH = prefs.getInt("slot_${i}_start_h", def.startH)
-            val startM = prefs.getInt("slot_${i}_start_m", def.startM)
-            val endH = prefs.getInt("slot_${i}_end_h", def.endH)
-            val endM = prefs.getInt("slot_${i}_end_m", def.endM)
-            val timeRange = "${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
-
-            val cardSlot = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(18, 14, 18, 14)
-                setBackgroundColor(Color.parseColor("#1E293B"))
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 6, 0, 6)
-                layoutParams = params
-            }
-
-            val tvSlotTitle = TextView(this).apply {
-                text = "Slot $i: $timeRange"
-                textSize = 14f
-                setTextColor(Color.parseColor("#38BDF8"))
-                setTypeface(null, Typeface.BOLD)
-            }
-            val tvSlotStats = TextView(this).apply {
-                text = "Present: ${formatDuration(pSec)} | Absent: ${formatDuration(aSec)}"
-                textSize = 13f
-                setTextColor(Color.WHITE)
-            }
-            cardSlot.addView(tvSlotTitle)
-            cardSlot.addView(tvSlotStats)
-
-            val absences = slotData?.optJSONArray("absences") ?: JSONArray()
-            if (absences.length() > 0) {
-                for (j in 0 until absences.length()) {
-                    val item = absences.getJSONObject(j)
-                    val tvSub = TextView(this).apply {
-                        text = "  • ${item.optString("start")} ➔ ${item.optString("end")} (${formatDuration(item.optLong("durationSec"))})"
-                        textSize = 12f
-                        setTextColor(Color.parseColor("#EF4444"))
-                    }
-                    cardSlot.addView(tvSub)
-                }
-            }
-            contentContainer.addView(cardSlot)
-        }
-
-        val tvGrandTotal = TextView(this).apply {
-            text = "📊 GRAND TOTAL FOR DAY:\n• Total Study (Present): ${formatDuration(totalPresentDay)}\n• Total Away (Absent): ${formatDuration(totalAbsentDay)}"
-            textSize = 14f
-            setTextColor(Color.parseColor("#22C55E"))
-            setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            setPadding(18, 14, 18, 14)
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 0, 0, 10)
-            layoutParams = params
-        }
-        contentContainer.addView(tvGrandTotal, 0)
-
-        scroll.addView(contentContainer)
-        dialogView.addView(scroll)
-
-        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog)
-            .setView(dialogView)
-            .setPositiveButton("Back") { _, _ -> showEventsLevel2SlotMenu(dateKey, dayName) }
-            .setNegativeButton("Close") { _, _ -> restoreLandscapeDeskMode() }
-            .create()
-
-        dialog.setOnCancelListener { restoreLandscapeDeskMode() }
-        dialog.show()
-    }
-
-    private fun formatDuration(sec: Long): String {
-        val h = sec / 3600
-        val m = (sec % 3600) / 60
-        val s = sec % 60
-        return if (h > 0) String.format("%02dh %02dm %02ds", h, m, s)
-        else String.format("%02dm %02ds", m, s)
-    }
-
     private fun initAlarmSound() {
         try {
             val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -1057,7 +817,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showUnlockPinDialog() {
         val input = EditText(this).apply {
-            hint = "Enter PIN"
+            hint = "Enter Master PIN"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setTextColor(Color.BLACK)
             setBackgroundResource(android.R.drawable.edit_text)
@@ -1066,6 +826,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("Unlock Desk Sentry")
+            .setMessage("Enter Master PIN to return to Dashboard / Mute Alarm:")
             .setView(container)
             .setPositiveButton("Unlock") { _, _ ->
                 if (input.text.toString().trim() == (prefs.getString("user_pin", "1234") ?: "1234")) {
@@ -1074,28 +835,6 @@ class MainActivity : AppCompatActivity() {
                     stopAlarmAndFinishAbsence()
                     Toast.makeText(this, "Unlocked", Toast.LENGTH_SHORT).show()
                 } else Toast.makeText(this, "Incorrect PIN", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showChangePinDialog() {
-        val input = EditText(this).apply {
-            hint = "New PIN"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            setTextColor(Color.BLACK)
-            setBackgroundResource(android.R.drawable.edit_text)
-        }
-        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
-
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
-            .setTitle("Change PIN")
-            .setView(container)
-            .setPositiveButton("Save") { _, _ ->
-                if (input.text.toString().length >= 4) {
-                    prefs.edit().putString("user_pin", input.text.toString().trim()).apply()
-                    Toast.makeText(this, "PIN Saved", Toast.LENGTH_SHORT).show()
-                } else Toast.makeText(this, "Min 4 digits", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
