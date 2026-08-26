@@ -28,7 +28,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
+import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import java.util.Calendar
 import java.util.concurrent.Executors
@@ -44,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     private var mediaPlayer: MediaPlayer? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var isUsingBackCamera = true
+
+    // Anti-flicker frame counters
+    private var consecutivePresentFrames = 0
+    private var consecutiveAbsentFrames = 0
 
     // UI Elements
     private lateinit var previewView: PreviewView
@@ -61,7 +67,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stealthOverlay: LinearLayout
     private lateinit var dashboardLayout: LinearLayout
 
-    // 5 Slots Views
     private val slotViews = ArrayList<SlotViewHolder>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastTapTime = 0L
@@ -85,17 +90,12 @@ class MainActivity : AppCompatActivity() {
         loadAllSlots()
         initAlarmSound()
 
-        // Set PreviewView to TextureView mode (Fixes black screen bug)
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
         if (allPermissionsGranted()) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.CAMERA),
-                101
-            )
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
         }
 
         startMonitoringLoop()
@@ -189,11 +189,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadAllSlots() {
         val defaultTimes = arrayOf(
-            Pair(5, 9),   // Slot 1: 5-9 AM
-            Pair(10, 14), // Slot 2: 10 AM-2 PM
-            Pair(15, 18), // Slot 3: 3-6 PM
-            Pair(19, 21), // Slot 4: 7-9 PM
-            Pair(21, 23)  // Slot 5: 9:30-11:30 PM
+            Pair(5, 9),
+            Pair(10, 14),
+            Pair(15, 18),
+            Pair(19, 21),
+            Pair(21, 23)
         )
 
         for (holder in slotViews) {
@@ -316,9 +316,39 @@ class MainActivity : AppCompatActivity() {
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                Toast.makeText(this, "Camera init error: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Camera error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    /**
+     * ACCURATE UPPER BODY DETECTION FILTER
+     * Eliminates false positives from chandeliers, coolers, shadows, and furniture.
+     */
+    private fun isRealUserPresent(pose: Pose): Boolean {
+        val minConfidence = 0.65f // Must be at least 65% confident
+
+        val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
+        val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
+        val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
+        val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
+        val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
+
+        val hasNose = nose != null && nose.inFrameLikelihood >= minConfidence
+        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
+        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
+        val hasEyesOrEars = (leftEye != null && leftEye.inFrameLikelihood >= minConfidence) ||
+                            (rightEye != null && rightEye.inFrameLikelihood >= minConfidence) ||
+                            (leftEar != null && leftEar.inFrameLikelihood >= minConfidence) ||
+                            (rightEar != null && rightEar.inFrameLikelihood >= minConfidence)
+
+        // Rule: Must detect (Both Shoulders) OR (Head/Face AND At Least One Shoulder)
+        val hasBothShoulders = hasLeftShoulder && hasRightShoulder
+        val hasFaceAndShoulder = (hasNose || hasEyesOrEars) && (hasLeftShoulder || hasRightShoulder)
+
+        return hasBothShoulders || hasFaceAndShoulder
     }
 
     @SuppressLint("UnsafeOptInUsageError")
@@ -328,9 +358,22 @@ class MainActivity : AppCompatActivity() {
             val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
             poseDetector.process(image)
                 .addOnSuccessListener { pose ->
-                    isPersonCurrentlyPresent = pose.allPoseLandmarks.isNotEmpty()
-                    if (isPersonCurrentlyPresent) {
-                        lastSeenTimestamp = System.currentTimeMillis()
+                    val frameDetected = isRealUserPresent(pose)
+
+                    // Temporal Smoothing Debounce (Requires 3 stable frames to switch)
+                    if (frameDetected) {
+                        consecutivePresentFrames++
+                        consecutiveAbsentFrames = 0
+                        if (consecutivePresentFrames >= 2) {
+                            isPersonCurrentlyPresent = true
+                            lastSeenTimestamp = System.currentTimeMillis()
+                        }
+                    } else {
+                        consecutiveAbsentFrames++
+                        consecutivePresentFrames = 0
+                        if (consecutiveAbsentFrames >= 3) {
+                            isPersonCurrentlyPresent = false
+                        }
                     }
                 }
                 .addOnCompleteListener {
