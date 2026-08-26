@@ -92,7 +92,7 @@
                     android:layout_width="0dp"
                     android:layout_height="40dp"
                     android:layout_weight="1"
-                    android:text="📊 Events"
+                    android:text="📊 Events Log"
                     android:textAllCaps="false"
                     android:textColor="@color/text_white"
                     android:backgroundTint="@color/accent_blue"
@@ -103,7 +103,7 @@
                     android:id="@+id/btnEnterStealth"
                     android:layout_width="0dp"
                     android:layout_height="40dp"
-                    android:layout_weight="1.3"
+                    android:layout_weight="1.2"
                     android:text="🌙 Stealth Mode"
                     android:textAllCaps="false"
                     android:textColor="@color/text_white"
@@ -125,6 +125,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
+                <!-- MASTER SWITCH & LOCK STATUS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -187,7 +188,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="5 Study Sessions (Custom Schedule)"
+                            android:text="5 Study Sessions (PIN Required to Edit)"
                             android:textColor="@color/accent_blue"
                             android:textSize="13sp"
                             android:textStyle="bold" />
