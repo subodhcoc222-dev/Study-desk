@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = true
     private var isAlwaysActiveMode = false
-    private var absenceThresholdMs = 180000L
+    private var absenceThresholdMs = 180000L // Default 3 mins buffer
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var mediaPlayer: MediaPlayer? = null
@@ -67,10 +67,9 @@ class MainActivity : AppCompatActivity() {
     private var alarmTriggerStartMs: Long = 0L
     private var isAlarmCurrentlyTracking: Boolean = false
 
-    // Official Break Bank State
-    private var isOfficialBreakActive: Boolean = false
-    private var officialBreakEndMs: Long = 0L
-    private var officialBreakStartMs: Long = 0L
+    // 2-Stage Auto Break Bank Tracking
+    private var isCurrentlyTakingAutoBreak: Boolean = false
+    private var autoBreakStartMs: Long = 0L
 
     // UI Elements
     private lateinit var previewView: PreviewView
@@ -89,14 +88,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTestAlarm: Button
     private lateinit var stealthOverlay: LinearLayout
     private lateinit var dashboardLayout: LinearLayout
-
-    // Break Bank UI
     private lateinit var tvBreakBankHeader: TextView
-    private lateinit var tvBreakTimerLive: TextView
-    private lateinit var btnTakeBreak15: Button
-    private lateinit var btnTakeBreak30: Button
-    private lateinit var btnResumeStudyEarly: Button
-    private lateinit var layoutBreakButtons: LinearLayout
 
     private val slotViews = ArrayList<SlotViewHolder>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -231,13 +223,7 @@ class MainActivity : AppCompatActivity() {
         btnTestAlarm = findViewById(R.id.btnTestAlarm)
         stealthOverlay = findViewById(R.id.stealthOverlay)
         dashboardLayout = findViewById(R.id.dashboardLayout)
-
         tvBreakBankHeader = findViewById(R.id.tvBreakBankHeader)
-        tvBreakTimerLive = findViewById(R.id.tvBreakTimerLive)
-        btnTakeBreak15 = findViewById(R.id.btnTakeBreak15)
-        btnTakeBreak30 = findViewById(R.id.btnTakeBreak30)
-        btnResumeStudyEarly = findViewById(R.id.btnResumeStudyEarly)
-        layoutBreakButtons = findViewById(R.id.layoutBreakButtons)
 
         slotViews.clear()
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot1), findViewById(R.id.tvSlot1), findViewById(R.id.btnSetSlot1), 1))
@@ -313,15 +299,10 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
-        // BREAK BANK ACTIONS
-        btnTakeBreak15.setOnClickListener { startOfficialBreak(15) }
-        btnTakeBreak30.setOnClickListener { startOfficialBreak(30) }
-        btnResumeStudyEarly.setOnClickListener { endOfficialBreakEarly() }
-
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
-                requirePinVerification("Change Away Grace Period") {
+                requirePinVerification("Change Free Buffer Period") {
                     absenceThresholdMs = when (rb.id) {
                         R.id.rb30s -> 30000L
                         R.id.rb1m -> 60000L
@@ -371,14 +352,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==========================================
-    // 30-MINUTE BREAK BANK ENGINE
+    // CUSTOM BREAK BANK LOGIC (PER SLOT)
     // ==========================================
 
+    data class SlotTimeConfig(
+        val startH: Int, 
+        val startM: Int, 
+        val endH: Int, 
+        val endM: Int, 
+        val defaultBreakMins: Int
+    )
+
+    private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
+        return when (slotNum) {
+            1 -> SlotTimeConfig(5, 0, 9, 0, 30)
+            2 -> SlotTimeConfig(10, 0, 14, 0, 30)
+            3 -> SlotTimeConfig(15, 0, 18, 0, 20)
+            4 -> SlotTimeConfig(19, 0, 21, 0, 15)
+            else -> SlotTimeConfig(21, 30, 23, 30, 15)
+        }
+    }
+
     private fun getRemainingBreakAllowanceSec(slotNum: Int): Long {
-        if (slotNum == -1) return 1800L // 30 mins
+        if (slotNum == -1) return 1800L
         val dateKey = getTodayDateKey()
         val key = "break_bank_${dateKey}_slot_$slotNum"
-        return prefs.getLong(key, 1800L) // Default 30 mins = 1800 seconds
+        val def = getDefaultSlotTimes(slotNum)
+        val configuredMins = prefs.getInt("slot_${slotNum}_break_bank_mins", def.defaultBreakMins)
+        return prefs.getLong(key, configuredMins * 60L)
     }
 
     private fun setRemainingBreakAllowanceSec(slotNum: Int, sec: Long) {
@@ -391,75 +392,15 @@ class MainActivity : AppCompatActivity() {
     private fun updateBreakBankUI() {
         val slotNum = if (currentActiveSlot != -1) currentActiveSlot else 1
         val remainingSec = getRemainingBreakAllowanceSec(slotNum)
-        val remainingMins = (remainingSec + 59) / 60
-
-        tvBreakBankHeader.text = "☕ Break Bank: ${remainingMins}m Left (Slot $slotNum)"
-
-        if (isOfficialBreakActive) {
-            layoutBreakButtons.visibility = View.GONE
-            btnResumeStudyEarly.visibility = View.VISIBLE
-            val secondsLeft = ((officialBreakEndMs - System.currentTimeMillis()) / 1000).coerceAtLeast(0L)
-            val m = secondsLeft / 60
-            val s = secondsLeft % 60
-            tvBreakTimerLive.text = String.format("BREAK: %02d:%02d", m, s)
-            tvBreakTimerLive.setTextColor(Color.parseColor("#38BDF8"))
-        } else {
-            layoutBreakButtons.visibility = View.VISIBLE
-            btnResumeStudyEarly.visibility = View.GONE
-            tvBreakTimerLive.text = "No Break Active"
-            tvBreakTimerLive.setTextColor(Color.parseColor("#94A3B8"))
-
-            btnTakeBreak15.isEnabled = remainingSec >= (15 * 60)
-            btnTakeBreak30.isEnabled = remainingSec >= (30 * 60)
-        }
-    }
-
-    private fun startOfficialBreak(requestedMinutes: Int) {
-        val slotNum = if (currentActiveSlot != -1) currentActiveSlot else 1
-        val remainingSec = getRemainingBreakAllowanceSec(slotNum)
-        val requestedSec = requestedMinutes * 60L
-
-        if (remainingSec < requestedSec) {
-            Toast.makeText(this, "Not enough break allowance left!", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        isOfficialBreakActive = true
-        officialBreakStartMs = System.currentTimeMillis()
-        officialBreakEndMs = officialBreakStartMs + (requestedSec * 1000L)
-
-        // Deduct from bank
-        setRemainingBreakAllowanceSec(slotNum, remainingSec - requestedSec)
-        stopAlarmAndFinishAbsence()
-        updateBreakBankUI()
-
-        Toast.makeText(this, "Enjoy your $requestedMinutes-min break! Return before timer ends.", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun endOfficialBreakEarly() {
-        if (!isOfficialBreakActive) return
-
-        val slotNum = if (currentActiveSlot != -1) currentActiveSlot else 1
-        val now = System.currentTimeMillis()
-        val unusedMs = (officialBreakEndMs - now).coerceAtLeast(0L)
-        val unusedSec = unusedMs / 1000L
-
-        // Refund unused seconds back to bank!
-        val currentBank = getRemainingBreakAllowanceSec(slotNum)
-        setRemainingBreakAllowanceSec(slotNum, currentBank + unusedSec)
-
-        // Record the actual official break taken in events
-        val actualTakenSec = ((now - officialBreakStartMs) / 1000L).coerceAtLeast(1L)
-        recordOfficialBreakInterval(slotNum, officialBreakStartMs, now, actualTakenSec)
-
-        isOfficialBreakActive = false
-        lastSeenTimestamp = System.currentTimeMillis()
-        updateBreakBankUI()
-
-        Toast.makeText(this, "Welcome back! Saved ${unusedSec / 60}m to your Break Bank.", Toast.LENGTH_SHORT).show()
+        val def = getDefaultSlotTimes(slotNum)
+        val maxMins = prefs.getInt("slot_${slotNum}_break_bank_mins", def.defaultBreakMins)
+        val m = remainingSec / 60
+        val s = remainingSec % 60
+        tvBreakBankHeader.text = String.format("☕ Break Bank: %02dm %02ds Left / %dm (Slot %d)", m, s, maxMins, slotNum)
     }
 
     private fun recordOfficialBreakInterval(slotNum: Int, startMs: Long, endMs: Long, durationSec: Long) {
+        if (durationSec <= 0) return
         val dateKey = getTodayDateKey()
         val json = getDayJson(dateKey)
         val slots = json.optJSONObject("slots") ?: JSONObject()
@@ -606,18 +547,6 @@ class MainActivity : AppCompatActivity() {
     // STUDY SLOTS & SCHEDULE LOGIC
     // ==========================================
 
-    private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
-        return when (slotNum) {
-            1 -> SlotTimeConfig(5, 0, 9, 0)
-            2 -> SlotTimeConfig(10, 0, 14, 0)
-            3 -> SlotTimeConfig(15, 0, 18, 0)
-            4 -> SlotTimeConfig(19, 0, 21, 0)
-            else -> SlotTimeConfig(21, 30, 23, 30)
-        }
-    }
-
-    data class SlotTimeConfig(val startH: Int, val startM: Int, val endH: Int, val endM: Int)
-
     private fun loadAllSlots() {
         for (holder in slotViews) {
             val def = getDefaultSlotTimes(holder.slotNum)
@@ -627,9 +556,10 @@ class MainActivity : AppCompatActivity() {
             val endH = prefs.getInt("slot_${holder.slotNum}_end_h", def.endH)
             val endM = prefs.getInt("slot_${holder.slotNum}_end_m", def.endM)
             val daysStr = prefs.getString("slot_${holder.slotNum}_days", "Mon-Sat") ?: "Mon-Sat"
+            val breakMins = prefs.getInt("slot_${holder.slotNum}_break_bank_mins", def.defaultBreakMins)
 
             holder.checkBox.isChecked = isEnabled
-            holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)} [$daysStr]"
+            holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)} [$daysStr] • Break: ${breakMins}m"
         }
     }
 
@@ -639,6 +569,7 @@ class MainActivity : AppCompatActivity() {
         var startM = prefs.getInt("slot_${slotNumber}_start_m", def.startM)
         var endH = prefs.getInt("slot_${slotNumber}_end_h", def.endH)
         var endM = prefs.getInt("slot_${slotNumber}_end_m", def.endM)
+        val currentBreakMins = prefs.getInt("slot_${slotNumber}_break_bank_mins", def.defaultBreakMins)
 
         val dayNames = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         val dayCalendarConsts = intArrayOf(
@@ -656,6 +587,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(40, 20, 40, 10)
         }
 
+        // 1. Time Range Section
         val btnStartTime = Button(this).apply {
             text = "Start: ${formatTime(startH, startM)}"
             textSize = 12f
@@ -682,11 +614,39 @@ class MainActivity : AppCompatActivity() {
 
         val timeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 10, 0, 15)
+            setPadding(0, 5, 0, 10)
             addView(btnStartTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
         dialogView.addView(timeRow)
+
+        // 2. Custom Break Bank Input Field
+        val tvBreakHeader = TextView(this).apply {
+            text = "Total Break Allowance for this Slot (Minutes):"
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 5, 0, 4)
+        }
+        dialogView.addView(tvBreakHeader)
+
+        val etBreakMins = EditText(this).apply {
+            hint = "e.g. 30"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(currentBreakMins.toString())
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(20, 15, 20, 15)
+        }
+        dialogView.addView(etBreakMins)
+
+        // 3. Days of the Week Selection
+        val tvDaysHeader = TextView(this).apply {
+            text = "Select Active Days:"
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 10, 0, 2)
+        }
+        dialogView.addView(tvDaysHeader)
 
         val checkBoxes = ArrayList<CheckBox>()
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -716,6 +676,10 @@ class MainActivity : AppCompatActivity() {
                 editor.putInt("slot_${slotNumber}_end_m", endM)
                 editor.putBoolean("slot_${slotNumber}_enabled", true)
 
+                // Save custom break allowance
+                val parsedMins = etBreakMins.text.toString().trim().toIntOrNull() ?: currentBreakMins
+                editor.putInt("slot_${slotNumber}_break_bank_mins", parsedMins.coerceAtLeast(0))
+
                 var activeDayCount = 0
                 for (i in 0..6) {
                     val isChecked = checkBoxes[i].isChecked
@@ -725,7 +689,8 @@ class MainActivity : AppCompatActivity() {
                 editor.putString("slot_${slotNumber}_days", if (activeDayCount == 7) "All Days" else "$activeDayCount Days")
                 editor.apply()
                 loadAllSlots()
-                Toast.makeText(this, "Slot $slotNumber Saved!", Toast.LENGTH_SHORT).show()
+                updateBreakBankUI()
+                Toast.makeText(this, "Slot $slotNumber Updated! Break: ${parsedMins}m", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -887,6 +852,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 2-STAGE MONITORING LOOP:
+     * Stage 1: Free Quick Buffer (e.g. 3 mins)
+     * Stage 2: Slot's Configured Break Bank Deduction
+     * Stage 3: Loud Alarm when Break Bank reaches 0s
+     */
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
             override fun run() {
@@ -899,53 +870,48 @@ class MainActivity : AppCompatActivity() {
                     tvLiveStatus.setTextColor(Color.GRAY)
                     tvCountdown.text = "Schedule: Inactive"
                     stopAlarmAndFinishAbsence()
-                } else if (isOfficialBreakActive) {
-                    // Check if official break has expired
-                    val remainingBreakMs = officialBreakEndMs - System.currentTimeMillis()
-                    if (remainingBreakMs <= 0) {
-                        // Official Break finished!
-                        val slotNum = if (activeSlot != -1) activeSlot else 1
-                        val totalSec = ((System.currentTimeMillis() - officialBreakStartMs) / 1000L).coerceAtLeast(1L)
-                        recordOfficialBreakInterval(slotNum, officialBreakStartMs, System.currentTimeMillis(), totalSec)
-                        isOfficialBreakActive = false
-                        lastSeenTimestamp = System.currentTimeMillis()
-
-                        Toast.makeText(applicationContext, "Break Time Over! Return to Desk immediately.", Toast.LENGTH_LONG).show()
-                    } else {
-                        val secLeft = remainingBreakMs / 1000
-                        tvLiveStatus.text = "☕ OFFICIAL BREAK IN PROGRESS"
-                        tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                        tvCountdown.text = "Break Time Remaining: ${secLeft}s"
-                        stopAlarmAndFinishAbsence()
-                    }
                 } else {
+                    val remainingBankSec = getRemainingBreakAllowanceSec(activeSlot)
+
                     if (isPersonCurrentlyPresent) {
                         tvLiveStatus.text = "● USER PRESENT & DETECTED"
                         tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
-                        tvCountdown.text = "Desk Status: Normal"
+                        val m = remainingBankSec / 60
+                        val s = remainingBankSec % 60
+                        tvCountdown.text = String.format("Desk Status: Normal | Break Bank: %02dm %02ds Left", m, s)
 
-                        if (isAlarmCurrentlyTracking) {
-                            stopAlarmAndFinishAbsence()
-                        }
+                        stopAlarmAndFinishAbsence()
                     } else {
-                        val awayDuration = System.currentTimeMillis() - lastSeenTimestamp
-                        val remainingMs = absenceThresholdMs - awayDuration
+                        val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
 
-                        if (remainingMs <= 0) {
-                            tvLiveStatus.text = "⚠ ALARM TRIGGERED: USER AWAY"
-                            tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
-                            tvCountdown.text = "STATUS: ALARM ACTIVE"
-
-                            if (!isAlarmCurrentlyTracking) {
-                                alarmTriggerStartMs = System.currentTimeMillis()
-                                isAlarmCurrentlyTracking = true
-                            }
-                            startAlarm()
-                        } else {
-                            val secondsLeft = (remainingMs / 1000).toInt()
-                            tvLiveStatus.text = "● USER AWAY FROM DESK"
+                        if (awayDurationMs <= absenceThresholdMs) {
+                            // Stage 1: Free Buffer (0 to 3 mins)
+                            val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
+                            tvLiveStatus.text = "● QUICK BUFFER (FREE WASHROOM/WATER)"
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                            tvCountdown.text = "Buffer Timeout: ${secondsLeft}s remaining"
+                            tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Break Bank Not Used)"
+                            stopAlarmAndFinishAbsence()
+                        } else {
+                            // Stage 2: Deducting from Slot's Custom Break Bank
+                            if (remainingBankSec > 0) {
+                                val m = remainingBankSec / 60
+                                val s = remainingBankSec % 60
+                                tvLiveStatus.text = "☕ ON BREAK (AUTO-DEDUCTING BANK)"
+                                tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
+                                stopAlarmAndFinishAbsence()
+                            } else {
+                                // Stage 3: Break Bank Empty -> Loud Alarm
+                                tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
+                                tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
+                                tvCountdown.text = "STATUS: LOUD ALARM RINGING (RETURN TO DESK)"
+
+                                if (!isAlarmCurrentlyTracking) {
+                                    alarmTriggerStartMs = System.currentTimeMillis()
+                                    isAlarmCurrentlyTracking = true
+                                }
+                                startAlarm()
+                            }
                         }
                     }
                 }
@@ -958,8 +924,37 @@ class MainActivity : AppCompatActivity() {
         val trackerHandler = Handler(Looper.getMainLooper())
         trackerHandler.post(object : Runnable {
             override fun run() {
-                if (currentActiveSlot != -1 && isPersonCurrentlyPresent && !isOfficialBreakActive) {
-                    incrementPresentTime(currentActiveSlot, 1)
+                if (currentActiveSlot != -1) {
+                    val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
+
+                    if (isPersonCurrentlyPresent) {
+                        incrementPresentTime(currentActiveSlot, 1)
+
+                        if (isCurrentlyTakingAutoBreak) {
+                            val durationSec = ((System.currentTimeMillis() - autoBreakStartMs) / 1000L).coerceAtLeast(1L)
+                            recordOfficialBreakInterval(currentActiveSlot, autoBreakStartMs, System.currentTimeMillis(), durationSec)
+                            isCurrentlyTakingAutoBreak = false
+                        }
+                    } else {
+                        val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+
+                        if (awayDurationMs > absenceThresholdMs) {
+                            if (remainingBank > 0) {
+                                setRemainingBreakAllowanceSec(currentActiveSlot, remainingBank - 1)
+
+                                if (!isCurrentlyTakingAutoBreak) {
+                                    autoBreakStartMs = System.currentTimeMillis()
+                                    isCurrentlyTakingAutoBreak = true
+                                }
+                            } else {
+                                if (isCurrentlyTakingAutoBreak) {
+                                    val durationSec = ((System.currentTimeMillis() - autoBreakStartMs) / 1000L).coerceAtLeast(1L)
+                                    recordOfficialBreakInterval(currentActiveSlot, autoBreakStartMs, System.currentTimeMillis(), durationSec)
+                                    isCurrentlyTakingAutoBreak = false
+                                }
+                            }
+                        }
+                    }
                 }
                 trackerHandler.postDelayed(this, 1000)
             }
