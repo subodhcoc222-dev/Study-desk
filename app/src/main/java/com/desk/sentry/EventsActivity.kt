@@ -153,6 +153,7 @@ class EventsActivity : AppCompatActivity() {
             val slotData = slotsObj.optJSONObject(i.toString())
             val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
             val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
+            val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
 
             val card = CardView(this).apply {
                 radius = 20f
@@ -176,8 +177,8 @@ class EventsActivity : AppCompatActivity() {
             }
 
             val tvStats = TextView(this).apply {
-                text = "🟢 Present: ${formatDuration(pSec)}  |  🔴 Absent: ${formatDuration(aSec)}"
-                textSize = 13f
+                text = "🟢 Study: ${formatDuration(pSec)} | ☕ Break: ${formatDuration(bSec)} | 🔴 Away: ${formatDuration(aSec)}"
+                textSize = 12f
                 setTextColor(Color.WHITE)
                 setPadding(0, 6, 0, 0)
             }
@@ -226,7 +227,9 @@ class EventsActivity : AppCompatActivity() {
 
         val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
         val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
+        val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
         val absences = slotData?.optJSONArray("absences") ?: JSONArray()
+        val breaks = slotData?.optJSONArray("breaks") ?: JSONArray()
 
         val summaryCard = CardView(this).apply {
             radius = 24f
@@ -245,63 +248,118 @@ class EventsActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#22C55E"))
             setTypeface(null, Typeface.BOLD)
         }
+        val tvBrk = TextView(this).apply {
+            text = "☕ Total Official Breaks: ${formatDuration(bSec)}"
+            textSize = 14f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 6, 0, 0)
+        }
         val tvAbs = TextView(this).apply {
-            text = "🔴 Total Away (Absent): ${formatDuration(aSec)}"
-            textSize = 15f
+            text = "🔴 Unexcused Absence: ${formatDuration(aSec)}"
+            textSize = 14f
             setTextColor(Color.parseColor("#EF4444"))
             setTypeface(null, Typeface.BOLD)
-            setPadding(0, 8, 0, 0)
+            setPadding(0, 6, 0, 0)
         }
         sumLayout.addView(tvPres)
+        sumLayout.addView(tvBrk)
         sumLayout.addView(tvAbs)
         summaryCard.addView(sumLayout)
         contentContainer.addView(summaryCard)
 
-        val tvIntervalHeader = TextView(this).apply {
-            text = "⏱ Logged Absent Intervals (Alarm Rings):"
+        // 1. OFFICIAL BREAKS LOG
+        val tvBreakHeader = TextView(this).apply {
+            text = "☕ Official Break History:"
             textSize = 14f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 6, 0, 10)
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(0, 6, 0, 6)
+        }
+        contentContainer.addView(tvBreakHeader)
+
+        if (breaks.length() == 0) {
+            val tvEmptyBrk = TextView(this).apply {
+                text = "• No official breaks taken yet for this slot."
+                textSize = 12f
+                setTextColor(Color.GRAY)
+                setPadding(0, 4, 0, 10)
+            }
+            contentContainer.addView(tvEmptyBrk)
+        } else {
+            for (k in 0 until breaks.length()) {
+                val item = breaks.getJSONObject(k)
+                val cardItem = CardView(this).apply {
+                    radius = 14f
+                    setCardBackgroundColor(Color.parseColor("#1E293B"))
+                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    params.setMargins(0, 0, 0, 8)
+                    layoutParams = params
+                }
+                val itemLayout = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(18, 14, 18, 14)
+                }
+                val tvRange = TextView(this).apply {
+                    text = "☕ Break ${k + 1}: ${item.optString("start")} ➔ ${item.optString("end")}"
+                    textSize = 13f
+                    setTextColor(Color.WHITE)
+                    setTypeface(null, Typeface.BOLD)
+                }
+                val tvDur = TextView(this).apply {
+                    text = "Duration: ${formatDuration(item.optLong("durationSec"))}"
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#38BDF8"))
+                    setPadding(0, 3, 0, 0)
+                }
+                itemLayout.addView(tvRange)
+                itemLayout.addView(tvDur)
+                cardItem.addView(itemLayout)
+                contentContainer.addView(cardItem)
+            }
+        }
+
+        // 2. UNEXCUSED ALARM LOG
+        val tvIntervalHeader = TextView(this).apply {
+            text = "⚠ Unexcused Away / Alarm Ring History:"
+            textSize = 14f
+            setTextColor(Color.parseColor("#EF4444"))
+            setPadding(0, 10, 0, 6)
         }
         contentContainer.addView(tvIntervalHeader)
 
         if (absences.length() == 0) {
             val tvEmpty = TextView(this).apply {
-                text = "🎉 Excellent discipline! No unexcused absences recorded for this slot."
-                textSize = 13f
+                text = "🎉 Perfect discipline! No unexcused absences recorded."
+                textSize = 12f
                 setTextColor(Color.GRAY)
-                setPadding(0, 12, 0, 0)
+                setPadding(0, 4, 0, 10)
             }
             contentContainer.addView(tvEmpty)
         } else {
             for (j in 0 until absences.length()) {
                 val item = absences.getJSONObject(j)
-                val start = item.optString("start")
-                val end = item.optString("end")
-                val dur = item.optLong("durationSec")
-
                 val cardItem = CardView(this).apply {
-                    radius = 16f
+                    radius = 14f
                     setCardBackgroundColor(Color.parseColor("#1E293B"))
                     val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    params.setMargins(0, 0, 0, 10)
+                    params.setMargins(0, 0, 0, 8)
                     layoutParams = params
                 }
                 val itemLayout = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
-                    setPadding(20, 16, 20, 16)
+                    setPadding(18, 14, 18, 14)
                 }
                 val tvRange = TextView(this).apply {
-                    text = "${j + 1}. $start  ➔  $end"
-                    textSize = 14f
+                    text = "${j + 1}. ${item.optString("start")} ➔ ${item.optString("end")}"
+                    textSize = 13f
                     setTextColor(Color.WHITE)
                     setTypeface(null, Typeface.BOLD)
                 }
                 val tvDur = TextView(this).apply {
-                    text = "Away Duration: ${formatDuration(dur)}"
+                    text = "Away Duration: ${formatDuration(item.optLong("durationSec"))}"
                     textSize = 12f
                     setTextColor(Color.parseColor("#EF4444"))
-                    setPadding(0, 4, 0, 0)
+                    setPadding(0, 3, 0, 0)
                 }
                 itemLayout.addView(tvRange)
                 itemLayout.addView(tvDur)
@@ -323,11 +381,13 @@ class EventsActivity : AppCompatActivity() {
         val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
 
         var grandPresent = 0L
+        var grandBreak = 0L
         var grandAbsent = 0L
 
         for (i in 1..5) {
             val slotData = slotsObj.optJSONObject(i.toString())
             grandPresent += slotData?.optLong("presentSec", 0L) ?: 0L
+            grandBreak += slotData?.optLong("officialBreakSec", 0L) ?: 0L
             grandAbsent += slotData?.optLong("absentSec", 0L) ?: 0L
         }
 
@@ -348,13 +408,20 @@ class EventsActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
         }
+        val tvGBreak = TextView(this).apply {
+            text = "☕ Total Official Breaks: ${formatDuration(grandBreak)}"
+            textSize = 14f
+            setTextColor(Color.parseColor("#BAE6FD"))
+            setPadding(0, 4, 0, 0)
+        }
         val tvGAbs = TextView(this).apply {
-            text = "⚠ Total Absent Time: ${formatDuration(grandAbsent)}"
+            text = "⚠ Unexcused Away: ${formatDuration(grandAbsent)}"
             textSize = 14f
             setTextColor(Color.parseColor("#FEF08A"))
-            setPadding(0, 6, 0, 0)
+            setPadding(0, 4, 0, 0)
         }
         grandLayout.addView(tvGPres)
+        grandLayout.addView(tvGBreak)
         grandLayout.addView(tvGAbs)
         grandCard.addView(grandLayout)
         contentContainer.addView(grandCard)
@@ -362,8 +429,8 @@ class EventsActivity : AppCompatActivity() {
         for (i in 1..5) {
             val slotData = slotsObj.optJSONObject(i.toString())
             val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
+            val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
             val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-            val absences = slotData?.optJSONArray("absences") ?: JSONArray()
 
             val card = CardView(this).apply {
                 radius = 20f
@@ -383,25 +450,13 @@ class EventsActivity : AppCompatActivity() {
                 setTypeface(null, Typeface.BOLD)
             }
             val tvBody = TextView(this).apply {
-                text = "Present: ${formatDuration(pSec)}  |  Absent: ${formatDuration(aSec)}"
+                text = "Study: ${formatDuration(pSec)} | Breaks: ${formatDuration(bSec)} | Away: ${formatDuration(aSec)}"
                 textSize = 13f
                 setTextColor(Color.WHITE)
                 setPadding(0, 4, 0, 0)
             }
             lay.addView(tvTitle)
             lay.addView(tvBody)
-
-            if (absences.length() > 0) {
-                for (j in 0 until absences.length()) {
-                    val item = absences.getJSONObject(j)
-                    val tvInt = TextView(this).apply {
-                        text = "  • ${item.optString("start")} ➔ ${item.optString("end")} (${formatDuration(item.optLong("durationSec"))})"
-                        textSize = 11f
-                        setTextColor(Color.parseColor("#EF4444"))
-                    }
-                    lay.addView(tvInt)
-                }
-            }
             card.addView(lay)
             contentContainer.addView(card)
         }
