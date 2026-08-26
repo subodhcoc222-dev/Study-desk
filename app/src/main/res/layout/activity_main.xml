@@ -125,7 +125,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- 1. OFFICIAL BREAK BANK CARD -->
+                <!-- 1. DYNAMIC BREAK BANK DISPLAY CARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -150,68 +150,96 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="☕ Official Break Bank: 30m Left"
+                                android:text="☕ Break Bank: Calibrating..."
                                 android:textColor="@color/accent_blue"
-                                android:textSize="14sp"
+                                android:textSize="13sp"
                                 android:textStyle="bold" />
 
                             <TextView
-                                android:id="@+id/tvBreakTimerLive"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="No Break Active"
-                                android:textColor="@color/text_dim"
+                                android:text="Auto-Smart"
+                                android:textColor="#22C55E"
                                 android:textSize="11sp"
                                 android:textStyle="bold" />
                         </LinearLayout>
 
-                        <!-- BREAK ACTION BUTTONS -->
-                        <LinearLayout
-                            android:id="@+id/layoutBreakButtons"
+                        <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:layout_marginTop="6dp">
-
-                            <Button
-                                android:id="@+id/btnTakeBreak15"
-                                android:layout_width="0dp"
-                                android:layout_height="36dp"
-                                android:layout_weight="1"
-                                android:text="☕ Take 15m Break"
-                                android:textSize="11sp"
-                                android:textAllCaps="false"
-                                android:layout_marginEnd="3dp"
-                                android:backgroundTint="#0F766E" />
-
-                            <Button
-                                android:id="@+id/btnTakeBreak30"
-                                android:layout_width="0dp"
-                                android:layout_height="36dp"
-                                android:layout_weight="1"
-                                android:text="☕ Take 30m Break"
-                                android:textSize="11sp"
-                                android:textAllCaps="false"
-                                android:layout_marginStart="3dp"
-                                android:backgroundTint="#0F766E" />
-                        </LinearLayout>
-
-                        <!-- RESUME STUDY EARLY BUTTON (VISIBLE DURING ACTIVE BREAK) -->
-                        <Button
-                            android:id="@+id/btnResumeStudyEarly"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="6dp"
-                            android:text="▶ Back at Desk! Resume Study &amp; Save Bank"
-                            android:textSize="11sp"
-                            android:textAllCaps="false"
-                            android:textColor="@color/text_white"
-                            android:backgroundTint="#22C55E"
-                            android:visibility="gone" />
+                            android:text="Buffer runs 1st (Free). If away &gt; Buffer, Custom Break Bank auto-deducts."
+                            android:textColor="@color/text_dim"
+                            android:textSize="10sp"
+                            android:layout_marginTop="2dp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 2. MASTER SWITCH & OVERRIDE -->
+                <!-- 2. AWAY GRACE PERIOD (FREE QUICK BUFFER) -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="6dp"
+                    app:cardCornerRadius="10dp"
+                    app:cardBackgroundColor="@color/card_dark">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Free Quick Buffer (Washroom / Water)"
+                            android:textColor="@color/accent_blue"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <RadioGroup
+                            android:id="@+id/rgGracePeriod"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="4dp">
+
+                            <RadioButton
+                                android:id="@+id/rb30s"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="30s"
+                                android:textColor="@color/text_white"
+                                android:textSize="11sp" />
+
+                            <RadioButton
+                                android:id="@+id/rb1m"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="1 Min"
+                                android:textColor="@color/text_white"
+                                android:textSize="11sp" />
+
+                            <RadioButton
+                                android:id="@+id/rb3m"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"
+                                android:text="3 Min"
+                                android:textColor="@color/text_white"
+                                android:textSize="11sp" />
+
+                            <RadioButton
+                                android:id="@+id/rb5m"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="5 Min"
+                                android:textColor="@color/text_white"
+                                android:textSize="11sp" />
+                        </RadioGroup>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 3. MASTER SWITCH & OVERRIDE -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -257,7 +285,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 3. 24/7 BACKGROUND GUARD -->
+                <!-- 4. 24/7 BACKGROUND GUARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -302,7 +330,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- 4. 5 CUSTOM STUDY SLOTS -->
+                <!-- 5. 5 CUSTOM STUDY SLOTS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -468,71 +496,6 @@
                                 android:textAllCaps="false"
                                 android:paddingHorizontal="8dp" />
                         </LinearLayout>
-                    </LinearLayout>
-                </androidx.cardview.widget.CardView>
-
-                <!-- 5. AWAY GRACE PERIOD -->
-                <androidx.cardview.widget.CardView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="6dp"
-                    app:cardCornerRadius="10dp"
-                    app:cardBackgroundColor="@color/card_dark">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:padding="10dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Micro-Away Buffer (Water / Stretch)"
-                            android:textColor="@color/accent_blue"
-                            android:textSize="12sp"
-                            android:textStyle="bold" />
-
-                        <RadioGroup
-                            android:id="@+id/rgGracePeriod"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:layout_marginTop="4dp">
-
-                            <RadioButton
-                                android:id="@+id/rb30s"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="30s"
-                                android:textColor="@color/text_white"
-                                android:textSize="11sp" />
-
-                            <RadioButton
-                                android:id="@+id/rb1m"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="1 Min"
-                                android:textColor="@color/text_white"
-                                android:textSize="11sp" />
-
-                            <RadioButton
-                                android:id="@+id/rb3m"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:checked="true"
-                                android:text="3 Min"
-                                android:textColor="@color/text_white"
-                                android:textSize="11sp" />
-
-                            <RadioButton
-                                android:id="@+id/rb5m"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="5 Min"
-                                android:textColor="@color/text_white"
-                                android:textSize="11sp" />
-                        </RadioGroup>
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
