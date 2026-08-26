@@ -42,28 +42,36 @@ class MainActivity : AppCompatActivity() {
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var mediaPlayer: MediaPlayer? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var isUsingBackCamera = true
 
-    // UI elements
+    // UI Elements
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
-    private lateinit var tvSlot1Display: TextView
-    private lateinit var tvSlot2Display: TextView
-    private lateinit var btnEditSlot1: Button
-    private lateinit var btnEditSlot2: Button
-    private lateinit var tvAdminStatus: TextView
-    private lateinit var btnActivateAdmin: Button
+    private lateinit var btnFlipCamera: Button
+    private lateinit var btnEnterStealth: Button
     private lateinit var switchMasterSentry: SwitchMaterial
     private lateinit var switchAlwaysActive: SwitchMaterial
     private lateinit var rgGracePeriod: RadioGroup
-    private lateinit var btnEnterStealth: Button
+    private lateinit var tvAdminStatus: TextView
+    private lateinit var btnActivateAdmin: Button
     private lateinit var btnChangePin: Button
     private lateinit var btnTestAlarm: Button
     private lateinit var stealthOverlay: LinearLayout
     private lateinit var dashboardLayout: LinearLayout
 
+    // 5 Slots Views
+    private val slotViews = ArrayList<SlotViewHolder>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastTapTime = 0L
+
+    data class SlotViewHolder(
+        val checkBox: CheckBox,
+        val textView: TextView,
+        val setButton: Button,
+        val slotNum: Int
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,13 +82,20 @@ class MainActivity : AppCompatActivity() {
 
         initViews()
         setupListeners()
-        updateSlotDisplays()
+        loadAllSlots()
         initAlarmSound()
+
+        // Set PreviewView to TextureView mode (Fixes black screen bug)
+        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
         if (allPermissionsGranted()) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CAMERA),
+                101
+            )
         }
 
         startMonitoringLoop()
@@ -90,20 +105,24 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         tvLiveStatus = findViewById(R.id.tvLiveStatus)
         tvCountdown = findViewById(R.id.tvCountdown)
-        tvSlot1Display = findViewById(R.id.tvSlot1Display)
-        tvSlot2Display = findViewById(R.id.tvSlot2Display)
-        btnEditSlot1 = findViewById(R.id.btnEditSlot1)
-        btnEditSlot2 = findViewById(R.id.btnEditSlot2)
-        tvAdminStatus = findViewById(R.id.tvAdminStatus)
-        btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
+        btnFlipCamera = findViewById(R.id.btnFlipCamera)
+        btnEnterStealth = findViewById(R.id.btnEnterStealth)
         switchMasterSentry = findViewById(R.id.switchMasterSentry)
         switchAlwaysActive = findViewById(R.id.switchAlwaysActive)
         rgGracePeriod = findViewById(R.id.rgGracePeriod)
-        btnEnterStealth = findViewById(R.id.btnEnterStealth)
+        tvAdminStatus = findViewById(R.id.tvAdminStatus)
+        btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
         btnChangePin = findViewById(R.id.btnChangePin)
         btnTestAlarm = findViewById(R.id.btnTestAlarm)
         stealthOverlay = findViewById(R.id.stealthOverlay)
         dashboardLayout = findViewById(R.id.dashboardLayout)
+
+        slotViews.clear()
+        slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot1), findViewById(R.id.tvSlot1), findViewById(R.id.btnSetSlot1), 1))
+        slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot2), findViewById(R.id.tvSlot2), findViewById(R.id.btnSetSlot2), 2))
+        slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot3), findViewById(R.id.tvSlot3), findViewById(R.id.btnSetSlot3), 3))
+        slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot4), findViewById(R.id.tvSlot4), findViewById(R.id.btnSetSlot4), 4))
+        slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot5), findViewById(R.id.tvSlot5), findViewById(R.id.btnSetSlot5), 5))
 
         updateAdminStatusUI()
     }
@@ -116,6 +135,12 @@ class MainActivity : AppCompatActivity() {
 
         switchAlwaysActive.setOnCheckedChangeListener { _, isChecked ->
             isAlwaysActiveMode = isChecked
+            lastSeenTimestamp = System.currentTimeMillis()
+        }
+
+        btnFlipCamera.setOnClickListener {
+            isUsingBackCamera = !isUsingBackCamera
+            startCamera()
         }
 
         rgGracePeriod.setOnCheckedChangeListener { _, checkedId ->
@@ -127,8 +152,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        btnEditSlot1.setOnClickListener { showSetSlotDialog(1) }
-        btnEditSlot2.setOnClickListener { showSetSlotDialog(2) }
+        for (holder in slotViews) {
+            holder.setButton.setOnClickListener { showSetSlotDialog(holder.slotNum) }
+            holder.checkBox.setOnCheckedChangeListener { _, isChecked ->
+                prefs.edit().putBoolean("slot_${holder.slotNum}_enabled", isChecked).apply()
+            }
+        }
 
         btnActivateAdmin.setOnClickListener { requestDeviceAdmin() }
 
@@ -158,28 +187,46 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSetSlotDialog(slotNumber: Int) {
-        val defaultStart = if (slotNumber == 1) 5 else 10
-        val defaultEnd = if (slotNumber == 1) 9 else 14
+    private fun loadAllSlots() {
+        val defaultTimes = arrayOf(
+            Pair(5, 9),   // Slot 1: 5-9 AM
+            Pair(10, 14), // Slot 2: 10 AM-2 PM
+            Pair(15, 18), // Slot 3: 3-6 PM
+            Pair(19, 21), // Slot 4: 7-9 PM
+            Pair(21, 23)  // Slot 5: 9:30-11:30 PM
+        )
 
-        val currentStartHour = prefs.getInt("slot_${slotNumber}_start_h", defaultStart)
+        for (holder in slotViews) {
+            val idx = holder.slotNum - 1
+            val isEnabled = prefs.getBoolean("slot_${holder.slotNum}_enabled", idx < 2)
+            val startH = prefs.getInt("slot_${holder.slotNum}_start_h", defaultTimes[idx].first)
+            val startM = prefs.getInt("slot_${holder.slotNum}_start_m", 0)
+            val endH = prefs.getInt("slot_${holder.slotNum}_end_h", defaultTimes[idx].second)
+            val endM = prefs.getInt("slot_${holder.slotNum}_end_m", if (idx == 4) 30 else 0)
+
+            holder.checkBox.isChecked = isEnabled
+            holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
+        }
+    }
+
+    private fun showSetSlotDialog(slotNumber: Int) {
+        val currentStartHour = prefs.getInt("slot_${slotNumber}_start_h", 6)
         val currentStartMin = prefs.getInt("slot_${slotNumber}_start_m", 0)
-        val currentEndHour = prefs.getInt("slot_${slotNumber}_end_h", defaultEnd)
+        val currentEndHour = prefs.getInt("slot_${slotNumber}_end_h", 9)
         val currentEndMin = prefs.getInt("slot_${slotNumber}_end_m", 0)
 
-        // Pick Start Time
         val startPicker = TimePickerDialog(this, { _, startH, startM ->
-            // Pick End Time
             val endPicker = TimePickerDialog(this, { _, endH, endM ->
                 prefs.edit().apply {
                     putInt("slot_${slotNumber}_start_h", startH)
                     putInt("slot_${slotNumber}_start_m", startM)
                     putInt("slot_${slotNumber}_end_h", endH)
                     putInt("slot_${slotNumber}_end_m", endM)
+                    putBoolean("slot_${slotNumber}_enabled", true)
                     apply()
                 }
-                updateSlotDisplays()
-                Toast.makeText(this, "Slot $slotNumber Updated!", Toast.LENGTH_SHORT).show()
+                loadAllSlots()
+                Toast.makeText(this, "Slot $slotNumber Saved & Enabled!", Toast.LENGTH_SHORT).show()
             }, currentEndHour, currentEndMin, false)
             endPicker.setTitle("Set Slot $slotNumber End Time")
             endPicker.show()
@@ -187,21 +234,6 @@ class MainActivity : AppCompatActivity() {
 
         startPicker.setTitle("Set Slot $slotNumber Start Time")
         startPicker.show()
-    }
-
-    private fun updateSlotDisplays() {
-        val s1StartH = prefs.getInt("slot_1_start_h", 5)
-        val s1StartM = prefs.getInt("slot_1_start_m", 0)
-        val s1EndH = prefs.getInt("slot_1_end_h", 9)
-        val s1EndM = prefs.getInt("slot_1_end_m", 0)
-
-        val s2StartH = prefs.getInt("slot_2_start_h", 10)
-        val s2StartM = prefs.getInt("slot_2_start_m", 0)
-        val s2EndH = prefs.getInt("slot_2_end_h", 14)
-        val s2EndM = prefs.getInt("slot_2_end_m", 0)
-
-        tvSlot1Display.text = "Slot 1: ${formatTime(s1StartH, s1StartM)} – ${formatTime(s1EndH, s1EndM)}"
-        tvSlot2Display.text = "Slot 2: ${formatTime(s2StartH, s2StartM)} – ${formatTime(s2EndH, s2EndM)}"
     }
 
     private fun formatTime(hour: Int, minute: Int): String {
@@ -221,58 +253,70 @@ class MainActivity : AppCompatActivity() {
         val now = Calendar.getInstance()
         val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
 
-        val s1Start = prefs.getInt("slot_1_start_h", 5) * 60 + prefs.getInt("slot_1_start_m", 0)
-        val s1End = prefs.getInt("slot_1_end_h", 9) * 60 + prefs.getInt("slot_1_end_m", 0)
-
-        val s2Start = prefs.getInt("slot_2_start_h", 10) * 60 + prefs.getInt("slot_2_start_m", 0)
-        val s2End = prefs.getInt("slot_2_end_h", 14) * 60 + prefs.getInt("slot_2_end_m", 0)
-
-        val inSlot1 = currentMinutes in s1Start until s1End
-        val inSlot2 = currentMinutes in s2Start until s2End
-
-        return inSlot1 || inSlot2
+        for (i in 1..5) {
+            val isEnabled = prefs.getBoolean("slot_${i}_enabled", i <= 2)
+            if (isEnabled) {
+                val start = prefs.getInt("slot_${i}_start_h", 0) * 60 + prefs.getInt("slot_${i}_start_m", 0)
+                val end = prefs.getInt("slot_${i}_end_h", 0) * 60 + prefs.getInt("slot_${i}_end_m", 0)
+                if (currentMinutes in start until end) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-            val options = PoseDetectorOptions.Builder()
-                .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
-                .build()
-            val poseDetector = PoseDetection.getClient(options)
-
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                .build()
-
-            imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                processCameraFrame(imageProxy, poseDetector)
-            }
-
             try {
-                cameraProvider.unbindAll()
-                val camera = cameraProvider.bindToLifecycle(
+                cameraProvider = cameraProviderFuture.get()
+                val cameraSelector = if (isUsingBackCamera) {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                }
+
+                val options = PoseDetectorOptions.Builder()
+                    .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+                    .build()
+                val poseDetector = PoseDetection.getClient(options)
+
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+
+                imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                    processCameraFrame(imageProxy, poseDetector)
+                }
+
+                cameraProvider?.unbindAll()
+                val camera = cameraProvider?.bindToLifecycle(
                     this,
                     cameraSelector,
                     preview,
                     imageAnalysis
                 )
 
-                // Backlight Compensation: Boost exposure
-                val range = camera.cameraInfo.exposureState.exposureCompensationRange
-                if (range.upper > 0) {
-                    camera.cameraControl.setExposureCompensationIndex(range.upper.coerceAtMost(2))
+                try {
+                    val range = camera?.cameraInfo?.exposureState?.exposureCompensationRange
+                    if (range != null && range.upper > 0) {
+                        camera.cameraControl.setExposureCompensationIndex(range.upper.coerceAtMost(2))
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
+
+                btnFlipCamera.text = if (isUsingBackCamera) "📷 Lens: Rear" else "📷 Lens: Front"
+
             } catch (e: Exception) {
                 e.printStackTrace()
+                Toast.makeText(this, "Camera init error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -303,7 +347,7 @@ class MainActivity : AppCompatActivity() {
                 val isMonitoring = isEffectiveStudyTime()
 
                 if (!isMonitoring) {
-                    tvLiveStatus.text = "● STANDBY (OUTSIDE STUDY HOURS)"
+                    tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
                     tvLiveStatus.setTextColor(Color.GRAY)
                     tvCountdown.text = "Schedule: Inactive"
                     stopAlarm()
@@ -455,9 +499,25 @@ class MainActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startCamera()
+        } else {
+            Toast.makeText(this, "Camera permission is required!", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         updateAdminStatusUI()
+        if (allPermissionsGranted() && cameraProvider == null) {
+            startCamera()
+        }
     }
 
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
