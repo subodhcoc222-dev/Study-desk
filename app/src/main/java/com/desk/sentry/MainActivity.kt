@@ -114,7 +114,7 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
 
-        // START 24/7 SERVICE & PERMISSIONS
+        // Start 24/7 Service if enabled
         checkOverlayAndBatteryPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
             startPersistentBackgroundService()
@@ -142,7 +142,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkOverlayAndBatteryPermissions() {
-        // 1. Overlay Permission (Display over other apps)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 try {
@@ -151,14 +150,12 @@ class MainActivity : AppCompatActivity() {
                         Uri.parse("package:$packageName")
                     )
                     startActivity(intent)
-                    Toast.makeText(this, "Enable 'Appear on top / Overlay' for 24/7 Protection", Toast.LENGTH_LONG).show()
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
             }
         }
 
-        // 2. Battery Optimization Bypass
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
@@ -282,6 +279,22 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, EventsActivity::class.java))
         }
 
+        // ENTER STEALTH MODE (NO PIN REQUIRED)
+        btnEnterStealth.setOnClickListener {
+            stealthOverlay.visibility = View.VISIBLE
+            dashboardLayout.visibility = View.GONE
+        }
+
+        // EXIT STEALTH MODE ON DOUBLE TAP (NO PIN REQUIRED)
+        stealthOverlay.setOnClickListener {
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastTapTime < 500) {
+                stealthOverlay.visibility = View.GONE
+                dashboardLayout.visibility = View.VISIBLE
+            }
+            lastTapTime = currentTime
+        }
+
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
@@ -317,19 +330,6 @@ class MainActivity : AppCompatActivity() {
             requirePinVerification("Enable Device Admin Protection") {
                 requestDeviceAdmin()
             }
-        }
-
-        btnEnterStealth.setOnClickListener {
-            stealthOverlay.visibility = View.VISIBLE
-            dashboardLayout.visibility = View.GONE
-        }
-
-        stealthOverlay.setOnClickListener {
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastTapTime < 500) {
-                showUnlockPinDialog()
-            }
-            lastTapTime = currentTime
         }
 
         btnChangePin.setOnClickListener {
@@ -900,31 +900,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAlarm() {
         if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
-    }
-
-    private fun showUnlockPinDialog() {
-        val input = EditText(this).apply {
-            hint = "Enter Master PIN"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            setTextColor(Color.BLACK)
-            setBackgroundResource(android.R.drawable.edit_text)
-        }
-        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
-
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
-            .setTitle("Unlock Desk Sentry")
-            .setMessage("Enter Master PIN to return to Dashboard / Mute Alarm:")
-            .setView(container)
-            .setPositiveButton("Unlock") { _, _ ->
-                if (input.text.toString().trim() == (prefs.getString("user_pin", "1234") ?: "1234")) {
-                    stealthOverlay.visibility = View.GONE
-                    dashboardLayout.visibility = View.VISIBLE
-                    stopAlarmAndFinishAbsence()
-                    Toast.makeText(this, "Unlocked", Toast.LENGTH_SHORT).show()
-                } else Toast.makeText(this, "Incorrect PIN", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun updateAdminStatusUI() {
