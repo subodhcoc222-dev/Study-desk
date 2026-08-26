@@ -113,13 +113,13 @@ class EventsActivity : AppCompatActivity() {
 
             val tvDate = TextView(this).apply {
                 text = if (dateKey == todayKey) "📍 Today • $dayName" else "📅 $dayName"
-                textSize = 16sp()
+                textSize = 16f
                 setTextColor(Color.WHITE)
                 setTypeface(null, Typeface.BOLD)
             }
             val tvSub = TextView(this).apply {
                 text = "Tap to view Slot 1–5 breakdown & logs →"
-                textSize = 13sp()
+                textSize = 13f
                 setTextColor(Color.parseColor("#94A3B8"))
                 setPadding(0, 8, 0, 0)
             }
@@ -170,14 +170,14 @@ class EventsActivity : AppCompatActivity() {
 
             val tvSlotTitle = TextView(this).apply {
                 text = "📘 Slot $i Overview"
-                textSize = 15sp()
+                textSize = 15f
                 setTextColor(Color.parseColor("#38BDF8"))
                 setTypeface(null, Typeface.BOLD)
             }
 
             val tvStats = TextView(this).apply {
                 text = "🟢 Present: ${formatDuration(pSec)}  |  🔴 Absent: ${formatDuration(aSec)}"
-                textSize = 13sp()
+                textSize = 13f
                 setTextColor(Color.WHITE)
                 setPadding(0, 6, 0, 0)
             }
@@ -196,7 +196,7 @@ class EventsActivity : AppCompatActivity() {
         // ALL-DAY CONSOLIDATED REPORT BUTTON
         val btnAllDay = Button(this).apply {
             text = "🌟 📊 View All-Day Consolidated Report"
-            textSize = 14sp()
+            textSize = 14f
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.parseColor("#F59E0B"))
             setTypeface(null, Typeface.BOLD)
@@ -228,7 +228,6 @@ class EventsActivity : AppCompatActivity() {
         val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
         val absences = slotData?.optJSONArray("absences") ?: JSONArray()
 
-        // PRESENT & ABSENT SUMMARY CARDS
         val summaryCard = CardView(this).apply {
             radius = 24f
             setCardBackgroundColor(Color.parseColor("#1E293B"))
@@ -242,13 +241,13 @@ class EventsActivity : AppCompatActivity() {
         }
         val tvPres = TextView(this).apply {
             text = "🟢 Total Study (Present): ${formatDuration(pSec)}"
-            textSize = 15sp()
+            textSize = 15f
             setTextColor(Color.parseColor("#22C55E"))
             setTypeface(null, Typeface.BOLD)
         }
         val tvAbs = TextView(this).apply {
             text = "🔴 Total Away (Absent): ${formatDuration(aSec)}"
-            textSize = 15sp()
+            textSize = 15f
             setTextColor(Color.parseColor("#EF4444"))
             setTypeface(null, Typeface.BOLD)
             setPadding(0, 8, 0, 0)
@@ -260,7 +259,7 @@ class EventsActivity : AppCompatActivity() {
 
         val tvIntervalHeader = TextView(this).apply {
             text = "⏱ Logged Absent Intervals (Alarm Rings):"
-            textSize = 14sp()
+            textSize = 14f
             setTextColor(Color.parseColor("#94A3B8"))
             setPadding(0, 6, 0, 10)
         }
@@ -269,7 +268,7 @@ class EventsActivity : AppCompatActivity() {
         if (absences.length() == 0) {
             val tvEmpty = TextView(this).apply {
                 text = "🎉 Excellent discipline! No unexcused absences recorded for this slot."
-                textSize = 13sp()
+                textSize = 13f
                 setTextColor(Color.GRAY)
                 setPadding(0, 12, 0, 0)
             }
@@ -294,13 +293,13 @@ class EventsActivity : AppCompatActivity() {
                 }
                 val tvRange = TextView(this).apply {
                     text = "${j + 1}. $start  ➔  $end"
-                    textSize = 14sp()
+                    textSize = 14f
                     setTextColor(Color.WHITE)
                     setTypeface(null, Typeface.BOLD)
                 }
                 val tvDur = TextView(this).apply {
                     text = "Away Duration: ${formatDuration(dur)}"
-                    textSize = 12sp()
+                    textSize = 12f
                     setTextColor(Color.parseColor("#EF4444"))
                     setPadding(0, 4, 0, 0)
                 }
@@ -326,7 +325,6 @@ class EventsActivity : AppCompatActivity() {
         var grandPresent = 0L
         var grandAbsent = 0L
 
-        // Calculate Totals
         for (i in 1..5) {
             val slotData = slotsObj.optJSONObject(i.toString())
             grandPresent += slotData?.optLong("presentSec", 0L) ?: 0L
@@ -346,13 +344,13 @@ class EventsActivity : AppCompatActivity() {
         }
         val tvGPres = TextView(this).apply {
             text = "🏆 Total Study Time: ${formatDuration(grandPresent)}"
-            textSize = 16sp()
+            textSize = 16f
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
         }
         val tvGAbs = TextView(this).apply {
             text = "⚠ Total Absent Time: ${formatDuration(grandAbsent)}"
-            textSize = 14sp()
+            textSize = 14f
             setTextColor(Color.parseColor("#FEF08A"))
             setPadding(0, 6, 0, 0)
         }
@@ -361,7 +359,6 @@ class EventsActivity : AppCompatActivity() {
         grandCard.addView(grandLayout)
         contentContainer.addView(grandCard)
 
-        // SLOTS BREAKDOWN
         for (i in 1..5) {
             val slotData = slotsObj.optJSONObject(i.toString())
             val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
@@ -381,13 +378,13 @@ class EventsActivity : AppCompatActivity() {
             }
             val tvTitle = TextView(this).apply {
                 text = "📘 Slot $i Summary"
-                textSize = 14sp()
+                textSize = 14f
                 setTextColor(Color.parseColor("#38BDF8"))
                 setTypeface(null, Typeface.BOLD)
             }
             val tvBody = TextView(this).apply {
                 text = "Present: ${formatDuration(pSec)}  |  Absent: ${formatDuration(aSec)}"
-                textSize = 13sp()
+                textSize = 13f
                 setTextColor(Color.WHITE)
                 setPadding(0, 4, 0, 0)
             }
@@ -399,7 +396,7 @@ class EventsActivity : AppCompatActivity() {
                     val item = absences.getJSONObject(j)
                     val tvInt = TextView(this).apply {
                         text = "  • ${item.optString("start")} ➔ ${item.optString("end")} (${formatDuration(item.optLong("durationSec"))})"
-                        textSize = 11sp()
+                        textSize = 11f
                         setTextColor(Color.parseColor("#EF4444"))
                     }
                     lay.addView(tvInt)
@@ -409,7 +406,4 @@ class EventsActivity : AppCompatActivity() {
             contentContainer.addView(card)
         }
     }
-
-    private fun sp(): Float = 1f
-    private fun Int.sp(): Float = this.toFloat()
 }
