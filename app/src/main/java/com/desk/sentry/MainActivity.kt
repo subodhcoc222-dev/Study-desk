@@ -13,9 +13,13 @@ import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -72,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnEnterStealth: Button
     private lateinit var switchMasterSentry: SwitchMaterial
     private lateinit var switchAlwaysActive: SwitchMaterial
+    private lateinit var switchBgGuard: SwitchMaterial
     private lateinit var rgGracePeriod: RadioGroup
     private lateinit var tvAdminStatus: TextView
     private lateinit var btnActivateAdmin: Button
@@ -93,10 +98,27 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+
         setContentView(R.layout.activity_main)
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
+
+        // START 24/7 BACKGROUND SERVICE IF ENABLED
+        if (prefs.getBoolean("bg_guard_enabled", true)) {
+            startPersistentBackgroundService()
+            requestBatteryOptimizationExemption()
+        }
 
         initViews()
         setupListeners()
@@ -105,7 +127,6 @@ class MainActivity : AppCompatActivity() {
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
-        // Check if Master PIN is set (First-time launch check)
         if (!prefs.contains("user_pin")) {
             showFirstTimeSetPinDialog()
         }
@@ -120,6 +141,53 @@ class MainActivity : AppCompatActivity() {
         startPeriodicTimeTracker()
     }
 
+    private fun startPersistentBackgroundService() {
+        val serviceIntent = Intent(this, SentryService::class.java).apply {
+            action = SentryService.ACTION_START
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
+    private fun stopPersistentBackgroundService() {
+        val serviceIntent = Intent(this, SentryService::class.java).apply {
+            action = SentryService.ACTION_STOP
+        }
+        startService(serviceIntent)
+    }
+
+    @SuppressLint("BatteryLife")
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        SentryService.isMainActivityVisible = true
+        updateAdminStatusUI()
+        if (allPermissionsGranted() && cameraProvider == null) startCamera()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        SentryService.isMainActivityVisible = false
+    }
+
     private fun initViews() {
         previewView = findViewById(R.id.previewView)
         tvLiveStatus = findViewById(R.id.tvLiveStatus)
@@ -129,6 +197,7 @@ class MainActivity : AppCompatActivity() {
         btnEnterStealth = findViewById(R.id.btnEnterStealth)
         switchMasterSentry = findViewById(R.id.switchMasterSentry)
         switchAlwaysActive = findViewById(R.id.switchAlwaysActive)
+        switchBgGuard = findViewById(R.id.switchBgGuard)
         rgGracePeriod = findViewById(R.id.rgGracePeriod)
         tvAdminStatus = findViewById(R.id.tvAdminStatus)
         btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
@@ -144,17 +213,18 @@ class MainActivity : AppCompatActivity() {
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot4), findViewById(R.id.tvSlot4), findViewById(R.id.btnSetSlot4), 4))
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot5), findViewById(R.id.tvSlot5), findViewById(R.id.btnSetSlot5), 5))
 
+        switchBgGuard.isChecked = prefs.getBoolean("bg_guard_enabled", true)
         updateAdminStatusUI()
     }
 
     private fun setupListeners() {
-        // Protected Switch
         switchMasterSentry.setOnClickListener {
             val targetState = switchMasterSentry.isChecked
-            switchMasterSentry.isChecked = !targetState // Revert temporarily until PIN verified
+            switchMasterSentry.isChecked = !targetState
             requirePinVerification("Modify Master Sentry State") {
                 switchMasterSentry.isChecked = targetState
                 isSentryArmed = targetState
+                prefs.edit().putBoolean("sentry_armed", targetState).apply()
                 if (!targetState) stopAlarmAndFinishAbsence()
             }
         }
@@ -165,7 +235,27 @@ class MainActivity : AppCompatActivity() {
             requirePinVerification("Toggle Override Mode") {
                 switchAlwaysActive.isChecked = targetState
                 isAlwaysActiveMode = targetState
+                prefs.edit().putBoolean("always_active_mode", targetState).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
+            }
+        }
+
+        // 24/7 BACKGROUND GUARD TOGGLE WITH PIN VERIFICATION
+        switchBgGuard.setOnClickListener {
+            val targetState = switchBgGuard.isChecked
+            switchBgGuard.isChecked = !targetState
+            val actionText = if (targetState) "Enable 24/7 Background Guard" else "Disable 24/7 Background Guard"
+            requirePinVerification(actionText) {
+                switchBgGuard.isChecked = targetState
+                prefs.edit().putBoolean("bg_guard_enabled", targetState).apply()
+                if (targetState) {
+                    startPersistentBackgroundService()
+                    requestBatteryOptimizationExemption()
+                    Toast.makeText(this, "24/7 Background Guard Activated!", Toast.LENGTH_SHORT).show()
+                } else {
+                    stopPersistentBackgroundService()
+                    Toast.makeText(this, "24/7 Background Guard Stopped!", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -175,11 +265,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnOpenEvents.setOnClickListener {
-            // Launch Full Screen Portrait Events Activity
             startActivity(Intent(this, EventsActivity::class.java))
         }
 
-        // Grace Period Radio Buttons PIN Interception
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
@@ -195,7 +283,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Slots PIN Interception
         for (holder in slotViews) {
             holder.setButton.setOnClickListener {
                 requirePinVerification("Edit Slot ${holder.slotNum} Schedule") {
@@ -246,10 +333,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==========================================
-    // PIN VERIFICATION & MANAGEMENT SYSTEM
-    // ==========================================
-
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
             hint = "Create 4-digit Master PIN"
@@ -261,7 +344,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Set Master Security PIN")
-            .setMessage("Welcome to Desk Sentry! Please create your master PIN. This will be required to modify settings and study hours.")
+            .setMessage("Welcome to Desk Sentry! Please create your master PIN. Give this PIN to your accountability partner/friend.")
             .setView(container)
             .setCancelable(false)
             .setPositiveButton("Save PIN", null)
@@ -317,10 +400,9 @@ class MainActivity : AppCompatActivity() {
         }
         val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputOld) }
 
-        // STEP 1: Verify Old PIN
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Change Master PIN - Step 1/2")
-            .setMessage("Please enter your current PIN to proceed:")
+            .setMessage("Enter current master PIN:")
             .setView(container)
             .setPositiveButton("Next") { _, _ ->
                 if (inputOld.text.toString().trim() == savedPin) {
@@ -342,7 +424,6 @@ class MainActivity : AppCompatActivity() {
         }
         val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputNew) }
 
-        // STEP 2: Enter New PIN
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Change Master PIN - Step 2/2")
             .setMessage("Enter your new master PIN:")
@@ -359,10 +440,6 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .show()
     }
-
-    // ==========================================
-    // STUDY SLOTS & SCHEDULE LOGIC
-    // ==========================================
 
     private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
         return when (slotNum) {
@@ -720,10 +797,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==========================================
-    // DATA PERSISTENCE JSON ENGINE
-    // ==========================================
-
     private fun getTodayDateKey(): String {
         return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     }
@@ -868,12 +941,6 @@ class MainActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) startCamera()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updateAdminStatusUI()
-        if (allPermissionsGranted() && cameraProvider == null) startCamera()
     }
 
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(baseContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
