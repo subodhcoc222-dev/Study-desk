@@ -125,7 +125,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- MASTER SWITCH & LOCK STATUS -->
+                <!-- MASTER SWITCH & OVERRIDE -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -168,6 +168,51 @@
                             android:text="Always Monitor (Ignore Schedule &amp; Test Now)"
                             android:textColor="@color/status_amber"
                             android:textSize="12sp" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- NEW: 24/7 BACKGROUND GUARD SWITCH CARD -->
+                <androidx.cardview.widget.CardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="6dp"
+                    app:cardCornerRadius="10dp"
+                    app:cardBackgroundColor="@color/card_dark">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:padding="10dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="24/7 Background Guard"
+                                android:textColor="@color/accent_blue"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Auto-launches sessions &amp; keeps watchdog alive"
+                                android:textColor="@color/text_dim"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchBgGuard"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:checked="true" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
