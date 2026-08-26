@@ -16,6 +16,7 @@ import android.media.RingtoneManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
@@ -48,11 +49,11 @@ class MainActivity : AppCompatActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var isUsingBackCamera = true
 
-    // Advanced Anti-Ghosting Counters
+    // Anti-Ghosting Counters
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
-    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 15 // ~1.5 seconds of steady human presence to reset timer
-    private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6   // ~0.5 seconds of absence to start countdown
+    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 15 // ~1.5s
+    private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6   // ~0.5s
 
     // UI Elements
     private lateinit var previewView: PreviewView
@@ -156,7 +157,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         for (holder in slotViews) {
-            holder.setButton.setOnClickListener { showSetSlotDialog(holder.slotNum) }
+            holder.setButton.setOnClickListener { showComprehensiveSlotDialog(holder.slotNum) }
             holder.checkBox.setOnCheckedChangeListener { _, isChecked ->
                 prefs.edit().putBoolean("slot_${holder.slotNum}_enabled", isChecked).apply()
             }
@@ -190,53 +191,189 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadAllSlots() {
-        val defaultTimes = arrayOf(
-            Pair(5, 9),
-            Pair(10, 14),
-            Pair(15, 18),
-            Pair(19, 21),
-            Pair(21, 23)
-        )
-
-        for (holder in slotViews) {
-            val idx = holder.slotNum - 1
-            val isEnabled = prefs.getBoolean("slot_${holder.slotNum}_enabled", idx < 2)
-            val startH = prefs.getInt("slot_${holder.slotNum}_start_h", defaultTimes[idx].first)
-            val startM = prefs.getInt("slot_${holder.slotNum}_start_m", 0)
-            val endH = prefs.getInt("slot_${holder.slotNum}_end_h", defaultTimes[idx].second)
-            val endM = prefs.getInt("slot_${holder.slotNum}_end_m", if (idx == 4) 30 else 0)
-
-            holder.checkBox.isChecked = isEnabled
-            holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)}"
+    private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
+        return when (slotNum) {
+            1 -> SlotTimeConfig(5, 0, 9, 0)
+            2 -> SlotTimeConfig(10, 0, 14, 0)
+            3 -> SlotTimeConfig(15, 0, 18, 0)
+            4 -> SlotTimeConfig(19, 0, 21, 0)
+            else -> SlotTimeConfig(21, 30, 23, 30)
         }
     }
 
-    private fun showSetSlotDialog(slotNumber: Int) {
-        val currentStartHour = prefs.getInt("slot_${slotNumber}_start_h", 6)
-        val currentStartMin = prefs.getInt("slot_${slotNumber}_start_m", 0)
-        val currentEndHour = prefs.getInt("slot_${slotNumber}_end_h", 9)
-        val currentEndMin = prefs.getInt("slot_${slotNumber}_end_m", 0)
+    data class SlotTimeConfig(val startH: Int, val startM: Int, val endH: Int, val endM: Int)
 
-        val startPicker = TimePickerDialog(this, { _, startH, startM ->
-            val endPicker = TimePickerDialog(this, { _, endH, endM ->
-                prefs.edit().apply {
-                    putInt("slot_${slotNumber}_start_h", startH)
-                    putInt("slot_${slotNumber}_start_m", startM)
-                    putInt("slot_${slotNumber}_end_h", endH)
-                    putInt("slot_${slotNumber}_end_m", endM)
-                    putBoolean("slot_${slotNumber}_enabled", true)
-                    apply()
+    private fun loadAllSlots() {
+        for (holder in slotViews) {
+            val def = getDefaultSlotTimes(holder.slotNum)
+            val isEnabled = prefs.getBoolean("slot_${holder.slotNum}_enabled", holder.slotNum <= 2)
+            val startH = prefs.getInt("slot_${holder.slotNum}_start_h", def.startH)
+            val startM = prefs.getInt("slot_${holder.slotNum}_start_m", def.startM)
+            val endH = prefs.getInt("slot_${holder.slotNum}_end_h", def.endH)
+            val endM = prefs.getInt("slot_${holder.slotNum}_end_m", def.endM)
+            val daysStr = prefs.getString("slot_${holder.slotNum}_days", "Mon-Sat") ?: "Mon-Sat"
+
+            holder.checkBox.isChecked = isEnabled
+            holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)} [$daysStr]"
+        }
+    }
+
+    private fun showComprehensiveSlotDialog(slotNumber: Int) {
+        val def = getDefaultSlotTimes(slotNumber)
+        var startH = prefs.getInt("slot_${slotNumber}_start_h", def.startH)
+        var startM = prefs.getInt("slot_${slotNumber}_start_m", def.startM)
+        var endH = prefs.getInt("slot_${slotNumber}_end_h", def.endH)
+        var endM = prefs.getInt("slot_${slotNumber}_end_m", def.endM)
+
+        val dayNames = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        val dayCalendarConsts = intArrayOf(
+            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
+        )
+
+        // Load saved days
+        val selectedDays = BooleanArray(7) { idx ->
+            val calConst = dayCalendarConsts[idx]
+            prefs.getBoolean("slot_${slotNumber}_day_$calConst", calConst != Calendar.SUNDAY)
+        }
+
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val tvTimeHeader = TextView(this).apply {
+            text = "Set Time Range:"
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+        dialogView.addView(tvTimeHeader)
+
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 10, 0, 20)
+        }
+
+        val btnStartTime = Button(this).apply {
+            text = "Start: ${formatTime(startH, startM)}"
+            textSize = 12f
+            setOnClickListener {
+                TimePickerDialog(context, { _, h, m ->
+                    startH = h
+                    startM = m
+                    text = "Start: ${formatTime(startH, startM)}"
+                }, startH, startM, false).show()
+            }
+        }
+
+        val btnEndTime = Button(this).apply {
+            text = "End: ${formatTime(endH, endM)}"
+            textSize = 12f
+            setOnClickListener {
+                TimePickerDialog(context, { _, h, m ->
+                    endH = h
+                    endM = m
+                    text = "End: ${formatTime(endH, endM)}"
+                }, endH, endM, false).show()
+            }
+        }
+
+        timeRow.addView(btnStartTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        timeRow.addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        dialogView.addView(timeRow)
+
+        val tvDaysHeader = TextView(this).apply {
+            text = "Select Active Days of Week:"
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+        dialogView.addView(tvDaysHeader)
+
+        // Days Checkboxes grid
+        val checkBoxes = ArrayList<CheckBox>()
+        val daysContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        for (i in 0..6) {
+            val cb = CheckBox(this).apply {
+                text = dayNames[i]
+                isChecked = selectedDays[i]
+                textSize = 12f
+            }
+            checkBoxes.add(cb)
+            if (i < 4) {
+                row1.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            } else {
+                row2.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }
+        }
+        daysContainer.addView(row1)
+        daysContainer.addView(row2)
+        dialogView.addView(daysContainer)
+
+        // Quick Preset Buttons (Mon-Sat / All Days)
+        val presetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 10)
+        }
+        val btnMonSat = Button(this).apply {
+            text = "Mon – Sat"
+            textSize = 10f
+            setOnClickListener {
+                for (i in 0..5) checkBoxes[i].isChecked = true
+                checkBoxes[6].isChecked = false
+            }
+        }
+        val btnAllDays = Button(this).apply {
+            text = "All 7 Days"
+            textSize = 10f
+            setOnClickListener {
+                for (cb in checkBoxes) cb.isChecked = true
+            }
+        }
+        presetRow.addView(btnMonSat, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        presetRow.addView(btnAllDays, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        dialogView.addView(presetRow)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("Configure Slot $slotNumber Schedule")
+            .setView(dialogView)
+            .setPositiveButton("Save Slot") { _, _ ->
+                val editor = prefs.edit()
+                editor.putInt("slot_${slotNumber}_start_h", startH)
+                editor.putInt("slot_${slotNumber}_start_m", startM)
+                editor.putInt("slot_${slotNumber}_end_h", endH)
+                editor.putInt("slot_${slotNumber}_end_m", endM)
+                editor.putBoolean("slot_${slotNumber}_enabled", true)
+
+                var activeDayCount = 0
+                for (i in 0..6) {
+                    val isDayChecked = checkBoxes[i].isChecked
+                    val calConst = dayCalendarConsts[i]
+                    editor.putBoolean("slot_${slotNumber}_day_$calConst", isDayChecked)
+                    if (isDayChecked) activeDayCount++
                 }
-                loadAllSlots()
-                Toast.makeText(this, "Slot $slotNumber Saved & Enabled!", Toast.LENGTH_SHORT).show()
-            }, currentEndHour, currentEndMin, false)
-            endPicker.setTitle("Set Slot $slotNumber End Time")
-            endPicker.show()
-        }, currentStartHour, currentStartMin, false)
 
-        startPicker.setTitle("Set Slot $slotNumber Start Time")
-        startPicker.show()
+                val summaryDays = when {
+                    activeDayCount == 7 -> "All Days"
+                    activeDayCount == 6 && !checkBoxes[6].isChecked -> "Mon-Sat"
+                    activeDayCount == 5 && !checkBoxes[5].isChecked && !checkBoxes[6].isChecked -> "Mon-Fri"
+                    activeDayCount == 0 -> "None"
+                    else -> "${activeDayCount} Days"
+                }
+                editor.putString("slot_${slotNumber}_days", summaryDays)
+                editor.apply()
+
+                loadAllSlots()
+                Toast.makeText(this, "Slot $slotNumber Updated Successfully!", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun formatTime(hour: Int, minute: Int): String {
@@ -254,15 +391,27 @@ class MainActivity : AppCompatActivity() {
         if (isAlwaysActiveMode) return true
 
         val now = Calendar.getInstance()
+        val currentDayOfWeek = now.get(Calendar.DAY_OF_WEEK) // Calendar.MONDAY = 2, etc.
         val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
 
         for (i in 1..5) {
             val isEnabled = prefs.getBoolean("slot_${i}_enabled", i <= 2)
             if (isEnabled) {
-                val start = prefs.getInt("slot_${i}_start_h", 0) * 60 + prefs.getInt("slot_${i}_start_m", 0)
-                val end = prefs.getInt("slot_${i}_end_h", 0) * 60 + prefs.getInt("slot_${i}_end_m", 0)
-                if (currentMinutes in start until end) {
-                    return true
+                // Check if current day of week is enabled for this slot (Default Mon-Sat enabled)
+                val isDayActive = prefs.getBoolean("slot_${i}_day_$currentDayOfWeek", currentDayOfWeek != Calendar.SUNDAY)
+                if (isDayActive) {
+                    val def = getDefaultSlotTimes(i)
+                    val startH = prefs.getInt("slot_${i}_start_h", def.startH)
+                    val startM = prefs.getInt("slot_${i}_start_m", def.startM)
+                    val endH = prefs.getInt("slot_${i}_end_h", def.endH)
+                    val endM = prefs.getInt("slot_${i}_end_m", def.endM)
+
+                    val start = startH * 60 + startM
+                    val end = endH * 60 + endM
+
+                    if (currentMinutes in start until end) {
+                        return true
+                    }
                 }
             }
         }
@@ -324,18 +473,13 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /**
-     * ULTRA-ACCURATE DESK USER VALIDATOR
-     * Rejects background chandeliers, cooler slats, curtains, and shadows.
-     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val minConfidence = 0.70f // High confidence threshold
+        val minConfidence = 0.70f
 
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE) ?: return false
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER) ?: return false
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER) ?: return false
 
-        // 1. Confidence check
         if (nose.inFrameLikelihood < minConfidence ||
             leftShoulder.inFrameLikelihood < minConfidence ||
             rightShoulder.inFrameLikelihood < minConfidence) {
@@ -346,14 +490,10 @@ class MainActivity : AppCompatActivity() {
         val lShoulderPos = leftShoulder.position
         val rShoulderPos = rightShoulder.position
 
-        // 2. Anatomical Rule: Head/Nose must be vertically ABOVE shoulders
         if (nosePos.y >= lShoulderPos.y && nosePos.y >= rShoulderPos.y) {
             return false
         }
 
-        // 3. Proximity / Scale Check (Shoulder Span):
-        // A human sitting in front of a desk camera spans at least 15% of frame width.
-        // Chandelier / cooler false positives are tiny (<10%) or absurdly wide.
         val shoulderSpan = abs(lShoulderPos.x - rShoulderPos.x)
         val minSpan = imgWidth * 0.14f
         val maxSpan = imgWidth * 0.88f
@@ -361,8 +501,6 @@ class MainActivity : AppCompatActivity() {
             return false
         }
 
-        // 4. Exclusion Zone (Ceiling / Chandelier Filter):
-        // Person sitting at desk has nose within 10% to 85% of screen height
         if (nosePos.y < imgHeight * 0.08f || nosePos.y > imgHeight * 0.85f) {
             return false
         }
@@ -384,9 +522,6 @@ class MainActivity : AppCompatActivity() {
                 .addOnSuccessListener { pose ->
                     val frameValid = isRealDeskUser(pose, effWidth, effHeight)
 
-                    // HYSTERESIS STATE MACHINE:
-                    // Requires 15 continuous valid frames (~1.5 seconds) to declare user PRESENT.
-                    // Momentary ghost detections (<15 frames) are completely ignored.
                     if (frameValid) {
                         sustainedPresentFrameCount++
                         sustainedAbsentFrameCount = 0
