@@ -8,6 +8,6 @@ import android.widget.Toast
 class AdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
-        Toast.makeText(context, "Desk Sentry Protection Activated!", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Desk Sentry Anti-Uninstall Protection Activated!", Toast.LENGTH_SHORT).show()
     }
 }
