@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:background="@color/bg_dark">
 
-    <!-- MAIN DASHBOARD (LANDSCAPE SPLIT VIEW) -->
+    <!-- MAIN INTERACTIVE DASHBOARD (LANDSCAPE SPLIT VIEW) -->
     <LinearLayout
         android:id="@+id/dashboardLayout"
         android:layout_width="match_parent"
@@ -13,7 +13,7 @@
         android:orientation="horizontal"
         android:padding="12dp">
 
-        <!-- LEFT PANEL: CAMERA VIEW & LIVE DETECTION FEED -->
+        <!-- LEFT SIDE: LIVE CAMERA PREVIEW & STATUS -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -27,66 +27,68 @@
                 android:layout_weight="1"
                 app:cardCornerRadius="16dp"
                 app:cardBackgroundColor="@color/card_dark"
-                app:cardElevation="4dp">
+                app:cardElevation="6dp">
 
                 <FrameLayout
                     android:layout_width="match_parent"
                     android:layout_height="match_parent">
 
+                    <!-- LIVE CAMERA VIEW -->
                     <androidx.camera.view.PreviewView
                         android:id="@+id/previewView"
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent" />
+                        android:layout_height="match_parent"
+                        app:scaleType="fillCenter" />
 
-                    <!-- LIVE STATUS OVERLAY CHIP -->
+                    <!-- TOP STATUS BADGE -->
                     <TextView
                         android:id="@+id/tvLiveStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="top|start"
                         android:layout_margin="12dp"
-                        android:background="#D9000000"
-                        android:paddingHorizontal="14dp"
-                        android:paddingVertical="8dp"
-                        android:text="● SCANNING FOR USER..."
+                        android:background="#CC000000"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="6dp"
+                        android:text="● STARTING CAMERA..."
                         android:textColor="@color/status_amber"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:textStyle="bold" />
 
-                    <!-- TIMEOUT / ALARM COUNTDOWN DISPLAY -->
+                    <!-- BOTTOM COUNTDOWN / STATUS BAR -->
                     <TextView
                         android:id="@+id/tvCountdown"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom|center_horizontal"
                         android:layout_marginBottom="12dp"
-                        android:background="#D9000000"
-                        android:paddingHorizontal="16dp"
+                        android:background="#CC000000"
+                        android:paddingHorizontal="14dp"
                         android:paddingVertical="6dp"
-                        android:text="Grace Time: Normal"
+                        android:text="Status: Initializing"
                         android:textColor="@color/text_white"
-                        android:textSize="13sp" />
+                        android:textSize="12sp" />
                 </FrameLayout>
             </androidx.cardview.widget.CardView>
 
-            <!-- STEALTH MODE TRIGGER BUTTON -->
+            <!-- STEALTH BLACK SCREEN BUTTON -->
             <Button
                 android:id="@+id/btnEnterStealth"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="44dp"
                 android:layout_marginTop="8dp"
                 android:text="🌙 Start Stealth OLED Mode (Black Screen)"
                 android:textAllCaps="false"
                 android:textColor="@color/text_white"
                 android:backgroundTint="@color/card_dark"
-                android:textSize="13sp" />
+                android:textSize="12sp" />
         </LinearLayout>
 
-        <!-- RIGHT PANEL: SETTINGS & CONTROLS DASHBOARD -->
+        <!-- RIGHT SIDE: CONTROL PANEL & CUSTOMIZATIONS -->
         <ScrollView
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="1.1"
+            android:layout_weight="1.2"
             android:paddingStart="8dp">
 
             <LinearLayout
@@ -94,44 +96,56 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- TITLE & MASTER SWITCH -->
+                <!-- 1. MASTER SENTRY SWITCH -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginBottom="8dp"
                     app:cardCornerRadius="12dp"
                     app:cardBackgroundColor="@color/card_dark">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
                         android:padding="12dp">
 
-                        <TextView
-                            android:layout_width="wrap_content"
+                        <LinearLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:text="Desk Sentry AI"
-                            android:textColor="@color/accent_blue"
-                            android:textSize="18sp"
-                            android:textStyle="bold" />
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Desk Sentry AI"
+                                android:textColor="@color/accent_blue"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Master Monitoring System"
+                                android:textColor="@color/text_dim"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <com.google.android.material.switchmaterial.SwitchMaterial
                             android:id="@+id/switchMasterSentry"
-                            android:layout_width="match_parent"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:checked="true"
-                            android:text="Sentry System Armed"
-                            android:textColor="@color/text_white"
-                            android:textSize="14sp" />
+                            android:checked="true" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- SCHEDULE & TIMING CARD -->
+                <!-- 2. CUSTOM STUDY HOURS SCHEDULER -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginBottom="8dp"
                     app:cardCornerRadius="12dp"
                     app:cardBackgroundColor="@color/card_dark">
 
@@ -144,35 +158,82 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Active Study Hours"
+                            android:text="Custom Study Hours"
                             android:textColor="@color/accent_blue"
                             android:textSize="14sp"
                             android:textStyle="bold" />
 
-                        <TextView
-                            android:layout_width="wrap_content"
+                        <!-- SLOT 1 ROW -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:text="• Slot 1: 05:00 AM – 09:00 AM\n• Slot 2: 10:00 AM – 02:00 PM"
-                            android:textColor="@color/text_dim"
-                            android:textSize="12sp" />
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="6dp">
 
+                            <TextView
+                                android:id="@+id/tvSlot1Display"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Slot 1: 05:00 AM – 09:00 AM"
+                                android:textColor="@color/text_white"
+                                android:textSize="12sp" />
+
+                            <Button
+                                android:id="@+id/btnEditSlot1"
+                                android:layout_width="wrap_content"
+                                android:layout_height="34dp"
+                                android:text="Set Time"
+                                android:textSize="11sp"
+                                android:textAllCaps="false"
+                                android:paddingHorizontal="10dp" />
+                        </LinearLayout>
+
+                        <!-- SLOT 2 ROW -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="4dp">
+
+                            <TextView
+                                android:id="@+id/tvSlot2Display"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Slot 2: 10:00 AM – 02:00 PM"
+                                android:textColor="@color/text_white"
+                                android:textSize="12sp" />
+
+                            <Button
+                                android:id="@+id/btnEditSlot2"
+                                android:layout_width="wrap_content"
+                                android:layout_height="34dp"
+                                android:text="Set Time"
+                                android:textSize="11sp"
+                                android:textAllCaps="false"
+                                android:paddingHorizontal="10dp" />
+                        </LinearLayout>
+
+                        <!-- ALWAYS ACTIVE OVERRIDE SWITCH -->
                         <com.google.android.material.switchmaterial.SwitchMaterial
                             android:id="@+id/switchAlwaysActive"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
-                            android:text="Override Schedule (Always Monitor Now)"
-                            android:textColor="@color/text_white"
-                            android:textSize="13sp" />
+                            android:text="Always Active Mode (Ignore Schedule &amp; Test Now)"
+                            android:textColor="@color/status_amber"
+                            android:textSize="12sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- GRACE PERIOD CARD -->
+                <!-- 3. AWAY GRACE PERIOD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginBottom="8dp"
                     app:cardCornerRadius="12dp"
                     app:cardBackgroundColor="@color/card_dark">
 
@@ -185,9 +246,9 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Away Grace Period (Washroom/Water)"
+                            android:text="Away Grace Period (Break Time)"
                             android:textColor="@color/accent_blue"
-                            android:textSize="14sp"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
 
                         <RadioGroup
@@ -195,7 +256,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="horizontal"
-                            android:layout_marginTop="6dp">
+                            android:layout_marginTop="4dp">
 
                             <RadioButton
                                 android:id="@+id/rb30s"
@@ -203,7 +264,7 @@
                                 android:layout_height="wrap_content"
                                 android:text="30s (Test)"
                                 android:textColor="@color/text_white"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                             <RadioButton
                                 android:id="@+id/rb1m"
@@ -211,7 +272,7 @@
                                 android:layout_height="wrap_content"
                                 android:text="1 Min"
                                 android:textColor="@color/text_white"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                             <RadioButton
                                 android:id="@+id/rb3m"
@@ -220,7 +281,7 @@
                                 android:checked="true"
                                 android:text="3 Min"
                                 android:textColor="@color/text_white"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                             <RadioButton
                                 android:id="@+id/rb5m"
@@ -228,16 +289,16 @@
                                 android:layout_height="wrap_content"
                                 android:text="5 Min"
                                 android:textColor="@color/text_white"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
                         </RadioGroup>
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- SECURITY & ANTI-UNINSTALL CARD -->
+                <!-- 4. SECURITY & TOOLS -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginBottom="8dp"
                     app:cardCornerRadius="12dp"
                     app:cardBackgroundColor="@color/card_dark">
 
@@ -247,20 +308,11 @@
                         android:orientation="vertical"
                         android:padding="12dp">
 
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Security &amp; Protection"
-                            android:textColor="@color/accent_blue"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="horizontal"
-                            android:gravity="center_vertical"
-                            android:layout_marginTop="6dp">
+                            android:gravity="center_vertical">
 
                             <TextView
                                 android:id="@+id/tvAdminStatus"
@@ -275,7 +327,7 @@
                             <Button
                                 android:id="@+id/btnActivateAdmin"
                                 android:layout_width="wrap_content"
-                                android:layout_height="36dp"
+                                android:layout_height="34dp"
                                 android:text="Enable Admin"
                                 android:textSize="11sp"
                                 android:textAllCaps="false"
@@ -294,7 +346,7 @@
                                 android:layout_height="38dp"
                                 android:layout_weight="1"
                                 android:text="Change PIN"
-                                android:textSize="12sp"
+                                android:textSize="11sp"
                                 android:textAllCaps="false"
                                 android:layout_marginEnd="4dp" />
 
@@ -303,8 +355,8 @@
                                 android:layout_width="0dp"
                                 android:layout_height="38dp"
                                 android:layout_weight="1"
-                                android:text="Test Alarm Sound"
-                                android:textSize="12sp"
+                                android:text="Test Loud Alarm"
+                                android:textSize="11sp"
                                 android:textAllCaps="false"
                                 android:layout_marginStart="4dp"
                                 android:backgroundTint="@color/status_amber" />
@@ -316,7 +368,7 @@
         </ScrollView>
     </LinearLayout>
 
-    <!-- STEALTH OLED OVERLAY VIEW (PURE BLACK SCREEN) -->
+    <!-- STEALTH OLED OVERLAY (DOUBLE TAP TO EXIT) -->
     <LinearLayout
         android:id="@+id/stealthOverlay"
         android:layout_width="match_parent"
@@ -334,7 +386,7 @@
             android:format12Hour="hh:mm a"
             android:format24Hour="HH:mm"
             android:textColor="#333333"
-            android:textSize="44sp"
+            android:textSize="48sp"
             android:textStyle="bold" />
 
         <TextView
@@ -349,7 +401,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Double tap anywhere to unlock / stop"
+            android:text="[ Double Tap anywhere to Unlock / Stop Alarm ]"
             android:textColor="#222222"
             android:textSize="12sp" />
     </LinearLayout>
