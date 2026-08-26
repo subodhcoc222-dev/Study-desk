@@ -9,7 +9,7 @@
         android:allowBackup="false"
         android:icon="@android:drawable/ic_lock_idle_alarm"
         android:label="Desk Sentry"
-        android:theme="@style/Theme.AppCompat.NoActionBar">
+        android:theme="@style/Theme.DeskSentry">
         
         <activity
             android:name=".MainActivity"
@@ -22,7 +22,6 @@
             </intent-filter>
         </activity>
 
-        <!-- एंटी-अनइंस्टॉल डिवाइस एडमिन रिसीवर -->
         <receiver
             android:name=".AdminReceiver"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
