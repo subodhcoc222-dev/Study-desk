@@ -1,10 +1,13 @@
 package com.desk.sentry
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -30,6 +33,22 @@ class EventsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 1. FORCE SHOW OVER LOCK SCREEN & PREVENT KEYGUARD BLOCKING
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            km.requestDismissKeyguard(this, null)
+        }
+        @Suppress("DEPRECATION")
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+
         setContentView(R.layout.activity_events)
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
@@ -89,7 +108,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 1: Full-Screen Date List (Landscape)
+     * LEVEL 1: Full-Screen Date List
      */
     private fun showLevel1DateList() {
         currentLevel = 1
@@ -148,7 +167,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 2: Slots Menu for Selected Date (Landscape)
+     * LEVEL 2: Slots Menu for Selected Date
      */
     private fun showLevel2SlotMenu(dateKey: String, dayName: String) {
         currentLevel = 2
@@ -223,7 +242,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 3: Detailed Data Log for Specific Slot (Landscape)
+     * LEVEL 3: Detailed Data Log for Specific Slot
      */
     private fun showLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int) {
         currentLevel = 3
@@ -379,7 +398,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 3: Full-Day Consolidated Report (Landscape)
+     * LEVEL 3: Full-Day Consolidated Report
      */
     private fun showLevel3AllDaySummary(dateKey: String, dayName: String) {
         currentLevel = 3
