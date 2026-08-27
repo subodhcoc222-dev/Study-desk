@@ -28,9 +28,8 @@ class SentryAccessibilityService : AccessibilityService() {
         val pkgName = event?.packageName?.toString() ?: return
         val className = event.className?.toString() ?: ""
 
-        // 1. ALWAYS ALLOW OUR OWN APP ACTIVITIES (MainActivity, EventsActivity)
+        // 1. ALWAYS ALLOW OUR OWN APP
         if (pkgName == packageName) {
-            SentryService.isAppInForeground = true
             return
         }
 
@@ -46,20 +45,12 @@ class SentryAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 3. ALLOW ONLY SYSTEM INPUT / KEYBOARDS (For Typing PIN)
+        // 3. ALLOW KEYBOARDS FOR PIN ENTRY
         if (pkgName.contains("inputmethod") || pkgName.contains("keyboard")) {
             return
         }
 
-        // 4. ALLOW SYSTEM STATUS BAR / NOTIFICATION SLIDER DROPDOWN
-        if (pkgName == "com.android.systemui" && 
-            !className.contains("Launcher", ignoreCase = true) && 
-            !className.contains("Home", ignoreCase = true)) {
-            return
-        }
-
-        // 5. HARD KIOSK LOCK: BLOCK EVERYTHING ELSE (Home Button, Recent Apps, Oppo Launcher, YouTube, Settings, etc.)
-        SentryService.isAppInForeground = false
+        // 4. HARD KIOSK LOCK: BLOCK HOME BUTTON, BACK, RECENT APPS, LAUNCHER, OTHER APPS
         bringAppToFront()
     }
 
