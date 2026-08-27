@@ -33,11 +33,11 @@
             </intent-filter>
         </activity>
 
-        <!-- EVENTS LOG (PORTRAIT MODE ONLY) -->
+        <!-- EVENTS LOG (LANDSCAPE LOCKED FOR ROCK-SOLID STABILITY) -->
         <activity
             android:name=".EventsActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
+            android:screenOrientation="landscape"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|keyboardHidden" />
@@ -52,7 +52,7 @@
                 android:value="Persistent Desk Study Sentry Watchdog" />
         </service>
 
-        <!-- ACCESSIBILITY SERVICE (HARD KIOSK & PREVENT TURN OFF) -->
+        <!-- ACCESSIBILITY SERVICE (PREVENT TURN OFF & INSTANT KIOSK LOCK) -->
         <service
             android:name=".SentryAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
