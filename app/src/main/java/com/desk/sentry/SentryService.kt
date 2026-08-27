@@ -1,17 +1,21 @@
 package com.desk.sentry
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -29,6 +33,7 @@ class SentryService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var bgMediaPlayer: MediaPlayer? = null
     private lateinit var audioManager: AudioManager
+    private var screenReceiver: BroadcastReceiver? = null
 
     companion object {
         const val ACTION_START = "ACTION_START"
@@ -52,9 +57,51 @@ class SentryService : Service() {
             acquire(24 * 60 * 60 * 1000L)
         }
 
+        registerScreenLockMonitor()
         initBackgroundAlarm()
         startForeground(NOTIFICATION_ID, buildForegroundNotification("24/7 Desk Guard Active"))
         startWatchdogLoop()
+    }
+
+    private fun registerScreenLockMonitor() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        screenReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                    val activeSlot = getActiveStudySlot()
+                    if (activeSlot != -1) {
+                        wakeScreenAndShowApp()
+                    }
+                }
+            }
+        }
+        registerReceiver(screenReceiver, filter)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun wakeScreenAndShowApp() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val screenWakeLock = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "DeskSentry::ForceWake"
+            )
+            screenWakeLock.acquire(3000)
+
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -68,8 +115,14 @@ class SentryService : Service() {
 
     private fun initBackgroundAlarm() {
         try {
-            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val customUriStr = prefs.getString("custom_alarm_uri", null)
+            val alertUri = if (customUriStr != null) {
+                Uri.parse(customUriStr)
+            } else {
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            }
+
             bgMediaPlayer = MediaPlayer().apply {
                 setDataSource(applicationContext, alertUri)
                 setAudioAttributes(
@@ -134,7 +187,6 @@ class SentryService : Service() {
 
                 val activeSlot = getActiveStudySlot()
 
-                // If study hours are running and user completely leaves our app, pull back MainActivity
                 if (activeSlot != -1 && !isAppInForeground) {
                     val intent = Intent(applicationContext, MainActivity::class.java).apply {
                         addFlags(
@@ -187,6 +239,10 @@ class SentryService : Service() {
     private fun stopForegroundSafely() {
         handler.removeCallbacksAndMessages(null)
         try {
+            if (screenReceiver != null) {
+                unregisterReceiver(screenReceiver)
+                screenReceiver = null
+            }
             if (bgMediaPlayer?.isPlaying == true) {
                 bgMediaPlayer?.stop()
                 bgMediaPlayer?.release()
