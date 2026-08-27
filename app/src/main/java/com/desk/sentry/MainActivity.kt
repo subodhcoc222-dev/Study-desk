@@ -122,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Force Wake Screen on Lock & Keep Screen ON
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -420,10 +421,6 @@ class MainActivity : AppCompatActivity() {
         ringtonePickerLauncher.launch(intent)
     }
 
-    // ==========================================
-    // CUSTOM BREAK BANK LOGIC (PER SLOT)
-    // ==========================================
-
     data class SlotTimeConfig(
         val startH: Int,
         val startM: Int,
@@ -499,10 +496,6 @@ class MainActivity : AppCompatActivity() {
         json.put("slots", slots)
         saveDayJson(dateKey, json)
     }
-
-    // ==========================================
-    // MASTER PIN SYSTEM
-    // ==========================================
 
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
@@ -611,10 +604,6 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .show()
     }
-
-    // ==========================================
-    // SLOTS & SCHEDULE LOGIC
-    // ==========================================
 
     private fun loadAllSlots() {
         for (holder in slotViews) {
