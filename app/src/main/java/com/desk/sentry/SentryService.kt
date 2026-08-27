@@ -134,7 +134,7 @@ class SentryService : Service() {
 
                 val activeSlot = getActiveStudySlot()
 
-                // Only pull MainActivity if the user is outside the Desk Sentry app completely
+                // If study hours are running and user completely leaves our app, pull back MainActivity
                 if (activeSlot != -1 && !isAppInForeground) {
                     val intent = Intent(applicationContext, MainActivity::class.java).apply {
                         addFlags(
