@@ -2,6 +2,8 @@ package com.desk.sentry
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.KeyguardManager
 import android.app.TimePickerDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
@@ -25,6 +27,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
@@ -87,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvAdminStatus: TextView
     private lateinit var btnActivateAdmin: Button
     private lateinit var btnChangePin: Button
+    private lateinit var btnChangeAlarmTone: Button
     private lateinit var btnTestAlarm: Button
     private lateinit var stealthOverlay: LinearLayout
     private lateinit var dashboardLayout: LinearLayout
@@ -95,6 +99,18 @@ class MainActivity : AppCompatActivity() {
     private val slotViews = ArrayList<SlotViewHolder>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastTapTime = 0L
+
+    // Ringtone Picker Result Handler
+    private val ringtonePickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri: Uri? = result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            if (uri != null) {
+                prefs.edit().putString("custom_alarm_uri", uri.toString()).apply()
+                initAlarmSound()
+                Toast.makeText(this, "New Alarm Sound Applied!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     data class SlotViewHolder(
         val checkBox: CheckBox,
@@ -109,7 +125,10 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            km.requestDismissKeyguard(this, null)
         }
+        @Suppress("DEPRECATION")
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
@@ -149,7 +168,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkAllPermissions() {
-        // 1. Accessibility Service Permission
         if (!isAccessibilityServiceEnabled()) {
             AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
                 .setTitle("🔒 Enable 'Prevent Turn Off' & App Lock")
@@ -162,7 +180,6 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
 
-        // 2. Overlay Permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 try {
@@ -177,7 +194,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 3. Battery Optimization Bypass
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
@@ -226,6 +242,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         SentryService.isAppInForeground = true
         SentryService.isMainActivityVisible = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateAdminStatusUI()
         updateBreakBankUI()
         if (allPermissionsGranted() && cameraProvider == null) startCamera()
@@ -250,6 +267,7 @@ class MainActivity : AppCompatActivity() {
         tvAdminStatus = findViewById(R.id.tvAdminStatus)
         btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
         btnChangePin = findViewById(R.id.btnChangePin)
+        btnChangeAlarmTone = findViewById(R.id.btnChangeAlarmTone)
         btnTestAlarm = findViewById(R.id.btnTestAlarm)
         stealthOverlay = findViewById(R.id.stealthOverlay)
         dashboardLayout = findViewById(R.id.dashboardLayout)
@@ -312,6 +330,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnOpenEvents.setOnClickListener {
+            SentryService.isAppInForeground = true
             startActivity(Intent(this, EventsActivity::class.java))
         }
 
@@ -370,15 +389,35 @@ class MainActivity : AppCompatActivity() {
             showChangePinTwoStepWorkflow()
         }
 
+        btnChangeAlarmTone.setOnClickListener {
+            requirePinVerification("Select Alarm Sound") {
+                openRingtonePicker()
+            }
+        }
+
         btnTestAlarm.setOnClickListener {
             if (mediaPlayer?.isPlaying == true) {
                 stopAlarmAndFinishAbsence()
-                btnTestAlarm.text = "Test Alarm"
+                btnTestAlarm.text = "🚨 Test"
             } else {
                 startAlarm()
-                btnTestAlarm.text = "Stop Alarm"
+                btnTestAlarm.text = "⏹ Stop"
             }
         }
+    }
+
+    private fun openRingtonePicker() {
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM or RingtoneManager.TYPE_RINGTONE)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Irritating Alarm Tone")
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+            val currentUriStr = prefs.getString("custom_alarm_uri", null)
+            if (currentUriStr != null) {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(currentUriStr))
+            }
+        }
+        ringtonePickerLauncher.launch(intent)
     }
 
     // ==========================================
@@ -878,12 +917,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 2-STAGE MONITORING LOOP:
-     * Stage 1: Free Quick Buffer (e.g. 3 mins)
-     * Stage 2: Slot's Configured Break Bank Deduction
-     * Stage 3: Loud Alarm when Break Bank reaches 0s (Enforces 100% Max Volume)
-     */
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
             override fun run() {
@@ -1076,7 +1109,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun initAlarmSound() {
         try {
-            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            mediaPlayer?.release()
+            val customUriStr = prefs.getString("custom_alarm_uri", null)
+            val alertUri = if (customUriStr != null) {
+                Uri.parse(customUriStr)
+            } else {
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            }
+
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(applicationContext, alertUri)
                 setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
