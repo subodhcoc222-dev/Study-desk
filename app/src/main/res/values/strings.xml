@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Desk Sentry</string>
+    <string name="accessibility_service_description">Enforces strict no-negotiation study lock, prevents exiting the app, and blocks turning off the device during study sessions.</string>
+</resources>
