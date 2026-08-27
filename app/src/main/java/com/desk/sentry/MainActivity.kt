@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Anti-Ghosting Counters
+    // Anti-Ghosting Frame Confirmation
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
     private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 8
@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
     private var isCurrentlyTakingAutoBreak: Boolean = false
     private var autoBreakStartMs: Long = 0L
 
-    // UI Elements
+    // UI Components
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
@@ -105,7 +105,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -149,11 +149,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkAllPermissions() {
-        // 1. Accessibility Service Permission (For Prevent Turn Off & Kiosk Lock)
+        // 1. Accessibility Service Permission
         if (!isAccessibilityServiceEnabled()) {
             AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
-                .setTitle("🔒 Enable 'Prevent Turn Off' &amp; App Lock")
-                .setMessage("To permanently lock Desk Sentry on screen and block power off (Alarmy mode), please turn ON 'Desk Sentry' in Accessibility Settings.")
+                .setTitle("🔒 Enable 'Prevent Turn Off' & App Lock")
+                .setMessage("To permanently lock Desk Sentry on screen and block power off, please turn ON 'Desk Sentry' in Accessibility Settings.")
                 .setCancelable(false)
                 .setPositiveButton("Open Settings") { _, _ ->
                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
 
-        // 2. Overlay Permission (Display over other apps)
+        // 2. Overlay Permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 try {
@@ -224,6 +224,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        SentryService.isAppInForeground = true
         SentryService.isMainActivityVisible = true
         updateAdminStatusUI()
         updateBreakBankUI()
@@ -385,10 +386,10 @@ class MainActivity : AppCompatActivity() {
     // ==========================================
 
     data class SlotTimeConfig(
-        val startH: Int, 
-        val startM: Int, 
-        val endH: Int, 
-        val endM: Int, 
+        val startH: Int,
+        val startM: Int,
+        val endH: Int,
+        val endM: Int,
         val defaultBreakMins: Int
     )
 
@@ -461,7 +462,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==========================================
-    // PIN & AUTH SYSTEM
+    // MASTER PIN SYSTEM
     // ==========================================
 
     private fun showFirstTimeSetPinDialog() {
@@ -573,7 +574,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==========================================
-    // STUDY SLOTS & SCHEDULE LOGIC
+    // SLOTS & SCHEDULE LOGIC
     // ==========================================
 
     private fun loadAllSlots() {
@@ -877,6 +878,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 2-STAGE MONITORING LOOP:
+     * Stage 1: Free Quick Buffer (e.g. 3 mins)
+     * Stage 2: Slot's Configured Break Bank Deduction
+     * Stage 3: Loud Alarm when Break Bank reaches 0s (Enforces 100% Max Volume)
+     */
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
             override fun run() {
@@ -904,14 +911,12 @@ class MainActivity : AppCompatActivity() {
                         val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
 
                         if (awayDurationMs <= absenceThresholdMs) {
-                            // Stage 1: Free Buffer (0 to 3 mins)
                             val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
                             tvLiveStatus.text = "● QUICK BUFFER (FREE WASHROOM/WATER)"
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
                             tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Break Bank Not Used)"
                             stopAlarmAndFinishAbsence()
                         } else {
-                            // Stage 2: Deducting from Slot's Custom Break Bank
                             if (remainingBankSec > 0) {
                                 val m = remainingBankSec / 60
                                 val s = remainingBankSec % 60
@@ -920,7 +925,6 @@ class MainActivity : AppCompatActivity() {
                                 tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
                                 stopAlarmAndFinishAbsence()
                             } else {
-                                // Stage 3: Break Bank Empty -> LOUD ALARM AT 100% MAXIMUM VOLUME
                                 tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
                                 tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
                                 tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
