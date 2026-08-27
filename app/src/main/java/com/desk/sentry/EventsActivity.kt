@@ -50,7 +50,6 @@ class EventsActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        SentryService.isAppInForeground = false
     }
 
     private fun handleBackNavigation() {
@@ -90,7 +89,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 1: Full-Screen Date List
+     * LEVEL 1: Full-Screen Date List (Portrait)
      */
     private fun showLevel1DateList() {
         currentLevel = 1
@@ -149,7 +148,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 2: Slots Menu for Selected Date
+     * LEVEL 2: Slots Menu for Selected Date (Portrait)
      */
     private fun showLevel2SlotMenu(dateKey: String, dayName: String) {
         currentLevel = 2
@@ -224,7 +223,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 3: Detailed Data Log for Specific Slot
+     * LEVEL 3: Detailed Data Log for Specific Slot (Portrait)
      */
     private fun showLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int) {
         currentLevel = 3
@@ -380,7 +379,7 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 3: Full-Day Consolidated Report
+     * LEVEL 3: Full-Day Consolidated Report (Portrait)
      */
     private fun showLevel3AllDaySummary(dateKey: String, dayName: String) {
         currentLevel = 3
