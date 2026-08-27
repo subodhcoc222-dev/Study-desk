@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
@@ -27,16 +28,19 @@ class SentryService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var bgMediaPlayer: MediaPlayer? = null
+    private lateinit var audioManager: AudioManager
 
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
+        var isAppInForeground = false
         var isMainActivityVisible = false
     }
 
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createNotificationChannel()
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -118,10 +122,6 @@ class SentryService : Service() {
             .build()
     }
 
-    /**
-     * Aggressive 1-Second Watchdog Loop
-     * If user presses Home or goes to background during study hours, pulls MainActivity to front immediately!
-     */
     private fun startWatchdogLoop() {
         handler.post(object : Runnable {
             override fun run() {
@@ -134,22 +134,19 @@ class SentryService : Service() {
 
                 val activeSlot = getActiveStudySlot()
 
-                if (activeSlot != -1) {
-                    // Study time is active!
-                    if (!isMainActivityVisible) {
-                        // Bring MainActivity to screen immediately
-                        val intent = Intent(applicationContext, MainActivity::class.java).apply {
-                            addFlags(
-                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            )
-                        }
-                        startActivity(intent)
+                // Only pull MainActivity if the user is outside the Desk Sentry app completely
+                if (activeSlot != -1 && !isAppInForeground) {
+                    val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        )
                     }
+                    startActivity(intent)
                 }
 
-                handler.postDelayed(this, 1000) // Checks every 1 second
+                handler.postDelayed(this, 1000)
             }
         })
     }
