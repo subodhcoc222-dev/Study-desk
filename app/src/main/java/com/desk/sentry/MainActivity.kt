@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        checkOverlayAndBatteryPermissions()
+        checkAllPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
             startPersistentBackgroundService()
         }
@@ -148,7 +148,21 @@ class MainActivity : AppCompatActivity() {
         startPeriodicTimeTracker()
     }
 
-    private fun checkOverlayAndBatteryPermissions() {
+    private fun checkAllPermissions() {
+        // 1. Accessibility Service Permission (For Prevent Turn Off & Kiosk Lock)
+        if (!isAccessibilityServiceEnabled()) {
+            AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+                .setTitle("🔒 Enable 'Prevent Turn Off' &amp; App Lock")
+                .setMessage("To permanently lock Desk Sentry on screen and block power off (Alarmy mode), please turn ON 'Desk Sentry' in Accessibility Settings.")
+                .setCancelable(false)
+                .setPositiveButton("Open Settings") { _, _ ->
+                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    startActivity(intent)
+                }
+                .show()
+        }
+
+        // 2. Overlay Permission (Display over other apps)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 try {
@@ -163,6 +177,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 3. Battery Optimization Bypass
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
@@ -176,6 +191,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedComponentName = ComponentName(this, SentryAccessibilityService::class.java)
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabledServices.contains(expectedComponentName.flattenToString()) ||
+               enabledServices.contains(expectedComponentName.flattenToShortString()) ||
+               enabledServices.contains(SentryAccessibilityService::class.java.simpleName)
     }
 
     private fun startPersistentBackgroundService() {
@@ -851,12 +877,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 2-STAGE MONITORING LOOP:
-     * Stage 1: Free Quick Buffer (e.g. 3 mins)
-     * Stage 2: Slot's Configured Break Bank Deduction
-     * Stage 3: Loud Alarm when Break Bank reaches 0s (Enforces 100% Max Volume)
-     */
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
             override fun run() {
@@ -1064,11 +1084,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * UNCOMPROMISING MAX VOLUME ALARM ENFORCER:
-     * - Overrides system silent/vibration
-     * - Forces STREAM_ALARM & STREAM_MUSIC to 100% MAXIMUM Level
-     */
     private fun startAlarm() {
         try {
             val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
