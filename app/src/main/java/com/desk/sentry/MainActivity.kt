@@ -421,6 +421,161 @@ class MainActivity : AppCompatActivity() {
         ringtonePickerLauncher.launch(intent)
     }
 
+    // ==========================================
+    // PERFECT LANDSCAPE-ADAPTED SLOT DIALOG
+    // ==========================================
+
+    private fun showComprehensiveSlotDialog(slotNumber: Int) {
+        val def = getDefaultSlotTimes(slotNumber)
+        var startH = prefs.getInt("slot_${slotNumber}_start_h", def.startH)
+        var startM = prefs.getInt("slot_${slotNumber}_start_m", def.startM)
+        var endH = prefs.getInt("slot_${slotNumber}_end_h", def.endH)
+        var endM = prefs.getInt("slot_${slotNumber}_end_m", def.endM)
+        val currentBreakMins = prefs.getInt("slot_${slotNumber}_break_bank_mins", def.defaultBreakMins)
+
+        val dayNames = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        val dayCalendarConsts = intArrayOf(
+            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
+        )
+
+        val selectedDays = BooleanArray(7) { idx ->
+            val calConst = dayCalendarConsts[idx]
+            prefs.getBoolean("slot_${slotNumber}_day_$calConst", calConst != Calendar.SUNDAY)
+        }
+
+        val scrollView = ScrollView(this).apply { isFillViewport = true }
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 16, 30, 16)
+        }
+
+        // ROW 1: START & END BUTTONS
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 8)
+        }
+
+        val btnStartTime = Button(this).apply {
+            text = "Start: ${formatTime(startH, startM)}"
+            textSize = 12f
+            setOnClickListener {
+                TimePickerDialog(context, { _, h, m ->
+                    startH = h
+                    startM = m
+                    text = "Start: ${formatTime(startH, startM)}"
+                }, startH, startM, false).show()
+            }
+        }
+
+        val btnEndTime = Button(this).apply {
+            text = "End: ${formatTime(endH, endM)}"
+            textSize = 12f
+            setOnClickListener {
+                TimePickerDialog(context, { _, h, m ->
+                    endH = h
+                    endM = m
+                    text = "End: ${formatTime(endH, endM)}"
+                }, endH, endM, false).show()
+            }
+        }
+
+        timeRow.addView(btnStartTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 8 })
+        timeRow.addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        dialogView.addView(timeRow)
+
+        // ROW 2: BREAK BANK MINUTES
+        val breakRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 4, 0, 8)
+        }
+
+        val tvBreakLabel = TextView(this).apply {
+            text = "Slot Break Bank (Mins):"
+            textSize = 12f
+            setTextColor(Color.DKGRAY)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+        }
+
+        val etBreakMins = EditText(this).apply {
+            hint = "30"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(currentBreakMins.toString())
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(16, 10, 16, 10)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f)
+        }
+
+        breakRow.addView(tvBreakLabel)
+        breakRow.addView(etBreakMins)
+        dialogView.addView(breakRow)
+
+        // ROW 3: ACTIVE DAYS HEADER
+        val tvDaysHeader = TextView(this).apply {
+            text = "Active Days for Slot $slotNumber:"
+            textSize = 12f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 4, 0, 4)
+        }
+        dialogView.addView(tvDaysHeader)
+
+        // ROW 4: 7-DAY COMPACT HORIZONTAL SELECTOR
+        val daysRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val checkBoxes = ArrayList<CheckBox>()
+        for (i in 0..6) {
+            val cb = CheckBox(this).apply {
+                text = dayNames[i]
+                isChecked = selectedDays[i]
+                textSize = 10f
+                setPadding(2, 0, 4, 0)
+            }
+            checkBoxes.add(cb)
+            daysRow.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        dialogView.addView(daysRow)
+
+        scrollView.addView(dialogView)
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("⚙️ Configure Slot $slotNumber")
+            .setView(scrollView)
+            .setPositiveButton("Save Settings") { _, _ ->
+                val editor = prefs.edit()
+                editor.putInt("slot_${slotNumber}_start_h", startH)
+                editor.putInt("slot_${slotNumber}_start_m", startM)
+                editor.putInt("slot_${slotNumber}_end_h", endH)
+                editor.putInt("slot_${slotNumber}_end_m", endM)
+                editor.putBoolean("slot_${slotNumber}_enabled", true)
+
+                val parsedMins = etBreakMins.text.toString().trim().toIntOrNull() ?: currentBreakMins
+                editor.putInt("slot_${slotNumber}_break_bank_mins", parsedMins.coerceAtLeast(0))
+
+                var activeDayCount = 0
+                for (i in 0..6) {
+                    val isChecked = checkBoxes[i].isChecked
+                    editor.putBoolean("slot_${slotNumber}_day_${dayCalendarConsts[i]}", isChecked)
+                    if (isChecked) activeDayCount++
+                }
+                editor.putString("slot_${slotNumber}_days", if (activeDayCount == 7) "All Days" else "$activeDayCount Days")
+                editor.apply()
+                loadAllSlots()
+                updateBreakBankUI()
+                Toast.makeText(this, "Slot $slotNumber Updated Successfully!", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ==========================================
+    // CUSTOM BREAK BANK LOGIC (PER SLOT)
+    // ==========================================
+
     data class SlotTimeConfig(
         val startH: Int,
         val startM: Int,
@@ -496,6 +651,10 @@ class MainActivity : AppCompatActivity() {
         json.put("slots", slots)
         saveDayJson(dateKey, json)
     }
+
+    // ==========================================
+    // MASTER PIN SYSTEM
+    // ==========================================
 
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
@@ -619,135 +778,6 @@ class MainActivity : AppCompatActivity() {
             holder.checkBox.isChecked = isEnabled
             holder.textView.text = "Slot ${holder.slotNum}: ${formatTime(startH, startM)} – ${formatTime(endH, endM)} [$daysStr] • Break: ${breakMins}m"
         }
-    }
-
-    private fun showComprehensiveSlotDialog(slotNumber: Int) {
-        val def = getDefaultSlotTimes(slotNumber)
-        var startH = prefs.getInt("slot_${slotNumber}_start_h", def.startH)
-        var startM = prefs.getInt("slot_${slotNumber}_start_m", def.startM)
-        var endH = prefs.getInt("slot_${slotNumber}_end_h", def.endH)
-        var endM = prefs.getInt("slot_${slotNumber}_end_m", def.endM)
-        val currentBreakMins = prefs.getInt("slot_${slotNumber}_break_bank_mins", def.defaultBreakMins)
-
-        val dayNames = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        val dayCalendarConsts = intArrayOf(
-            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
-            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
-        )
-
-        val selectedDays = BooleanArray(7) { idx ->
-            val calConst = dayCalendarConsts[idx]
-            prefs.getBoolean("slot_${slotNumber}_day_$calConst", calConst != Calendar.SUNDAY)
-        }
-
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 10)
-        }
-
-        val btnStartTime = Button(this).apply {
-            text = "Start: ${formatTime(startH, startM)}"
-            textSize = 12f
-            setOnClickListener {
-                TimePickerDialog(context, { _, h, m ->
-                    startH = h
-                    startM = m
-                    text = "Start: ${formatTime(startH, startM)}"
-                }, startH, startM, false).show()
-            }
-        }
-
-        val btnEndTime = Button(this).apply {
-            text = "End: ${formatTime(endH, endM)}"
-            textSize = 12f
-            setOnClickListener {
-                TimePickerDialog(context, { _, h, m ->
-                    endH = h
-                    endM = m
-                    text = "End: ${formatTime(endH, endM)}"
-                }, endH, endM, false).show()
-            }
-        }
-
-        val timeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 5, 0, 10)
-            addView(btnStartTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        dialogView.addView(timeRow)
-
-        val tvBreakHeader = TextView(this).apply {
-            text = "Total Break Allowance for this Slot (Minutes):"
-            textSize = 13f
-            setTextColor(Color.DKGRAY)
-            setPadding(0, 5, 0, 4)
-        }
-        dialogView.addView(tvBreakHeader)
-
-        val etBreakMins = EditText(this).apply {
-            hint = "e.g. 30"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(currentBreakMins.toString())
-            setTextColor(Color.BLACK)
-            setBackgroundResource(android.R.drawable.edit_text)
-            setPadding(20, 15, 20, 15)
-        }
-        dialogView.addView(etBreakMins)
-
-        val tvDaysHeader = TextView(this).apply {
-            text = "Select Active Days:"
-            textSize = 13f
-            setTextColor(Color.DKGRAY)
-            setPadding(0, 10, 0, 2)
-        }
-        dialogView.addView(tvDaysHeader)
-
-        val checkBoxes = ArrayList<CheckBox>()
-        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-
-        for (i in 0..6) {
-            val cb = CheckBox(this).apply {
-                text = dayNames[i]
-                isChecked = selectedDays[i]
-                textSize = 12f
-            }
-            checkBoxes.add(cb)
-            if (i < 4) row1.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            else row2.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        dialogView.addView(row1)
-        dialogView.addView(row2)
-
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
-            .setTitle("Configure Slot $slotNumber")
-            .setView(dialogView)
-            .setPositiveButton("Save") { _, _ ->
-                val editor = prefs.edit()
-                editor.putInt("slot_${slotNumber}_start_h", startH)
-                editor.putInt("slot_${slotNumber}_start_m", startM)
-                editor.putInt("slot_${slotNumber}_end_h", endH)
-                editor.putInt("slot_${slotNumber}_end_m", endM)
-                editor.putBoolean("slot_${slotNumber}_enabled", true)
-
-                val parsedMins = etBreakMins.text.toString().trim().toIntOrNull() ?: currentBreakMins
-                editor.putInt("slot_${slotNumber}_break_bank_mins", parsedMins.coerceAtLeast(0))
-
-                var activeDayCount = 0
-                for (i in 0..6) {
-                    val isChecked = checkBoxes[i].isChecked
-                    editor.putBoolean("slot_${slotNumber}_day_${dayCalendarConsts[i]}", isChecked)
-                    if (isChecked) activeDayCount++
-                }
-                editor.putString("slot_${slotNumber}_days", if (activeDayCount == 7) "All Days" else "$activeDayCount Days")
-                editor.apply()
-                loadAllSlots()
-                updateBreakBankUI()
-                Toast.makeText(this, "Slot $slotNumber Updated! Break: ${parsedMins}m", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun formatTime(hour: Int, minute: Int): String {
