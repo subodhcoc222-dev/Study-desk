@@ -3,7 +3,6 @@ package com.desk.sentry
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.KeyguardManager
 import android.app.TimePickerDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
@@ -122,17 +121,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Force Wake Screen on Lock & Keep Screen ON
+        // Show directly over Lock Screen without password prompts
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            km.requestDismissKeyguard(this, null)
         }
         @Suppress("DEPRECATION")
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
@@ -241,8 +237,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        SentryService.isAppInForeground = true
         SentryService.isMainActivityVisible = true
+        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateAdminStatusUI()
         updateBreakBankUI()
@@ -252,6 +248,13 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         SentryService.isMainActivityVisible = false
+        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
+    }
+
+    // Strict No-Negotiation: Back Button does nothing in MainActivity
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Ignored
     }
 
     private fun initViews() {
@@ -331,7 +334,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnOpenEvents.setOnClickListener {
-            SentryService.isAppInForeground = true
+            SentryService.isEventsActivityVisible = true
+            SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
             startActivity(Intent(this, EventsActivity::class.java))
         }
 
@@ -421,10 +425,6 @@ class MainActivity : AppCompatActivity() {
         ringtonePickerLauncher.launch(intent)
     }
 
-    // ==========================================
-    // PERFECT LANDSCAPE-ADAPTED SLOT DIALOG
-    // ==========================================
-
     private fun showComprehensiveSlotDialog(slotNumber: Int) {
         val def = getDefaultSlotTimes(slotNumber)
         var startH = prefs.getInt("slot_${slotNumber}_start_h", def.startH)
@@ -450,7 +450,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(30, 16, 30, 16)
         }
 
-        // ROW 1: START & END BUTTONS
         val timeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 8)
@@ -484,7 +483,6 @@ class MainActivity : AppCompatActivity() {
         timeRow.addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         dialogView.addView(timeRow)
 
-        // ROW 2: BREAK BANK MINUTES
         val breakRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -512,7 +510,6 @@ class MainActivity : AppCompatActivity() {
         breakRow.addView(etBreakMins)
         dialogView.addView(breakRow)
 
-        // ROW 3: ACTIVE DAYS HEADER
         val tvDaysHeader = TextView(this).apply {
             text = "Active Days for Slot $slotNumber:"
             textSize = 12f
@@ -521,7 +518,6 @@ class MainActivity : AppCompatActivity() {
         }
         dialogView.addView(tvDaysHeader)
 
-        // ROW 4: 7-DAY COMPACT HORIZONTAL SELECTOR
         val daysRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -571,10 +567,6 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .show()
     }
-
-    // ==========================================
-    // CUSTOM BREAK BANK LOGIC (PER SLOT)
-    // ==========================================
 
     data class SlotTimeConfig(
         val startH: Int,
@@ -651,10 +643,6 @@ class MainActivity : AppCompatActivity() {
         json.put("slots", slots)
         saveDayJson(dateKey, json)
     }
-
-    // ==========================================
-    // MASTER PIN SYSTEM
-    // ==========================================
 
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
