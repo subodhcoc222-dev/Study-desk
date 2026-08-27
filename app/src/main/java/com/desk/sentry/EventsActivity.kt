@@ -43,6 +43,16 @@ class EventsActivity : AppCompatActivity() {
         showLevel1DateList()
     }
 
+    override fun onResume() {
+        super.onResume()
+        SentryService.isAppInForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        SentryService.isAppInForeground = false
+    }
+
     private fun handleBackNavigation() {
         when (currentLevel) {
             3 -> showLevel2SlotMenu(selectedDateKey, selectedDayName)
