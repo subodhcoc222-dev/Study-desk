@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
     <application
         android:allowBackup="false"
@@ -17,7 +18,7 @@
         android:label="Desk Sentry"
         android:theme="@style/Theme.DeskSentry">
         
-        <!-- MAIN DASHBOARD -->
+        <!-- MAIN DASHBOARD (LANDSCAPE) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -25,19 +26,21 @@
             android:screenOrientation="landscape"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
-            android:configChanges="orientation|screenSize">
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- FULL-SCREEN EVENTS -->
+        <!-- EVENTS LOG (PORTRAIT MODE ONLY) -->
         <activity
             android:name=".EventsActivity"
             android:exported="false"
             android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize" />
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <!-- 24/7 BACKGROUND PERSISTENT SERVICE -->
         <service
@@ -49,7 +52,7 @@
                 android:value="Persistent Desk Study Sentry Watchdog" />
         </service>
 
-        <!-- ACCESSIBILITY SERVICE (PREVENT TURN OFF & HARD KIOSK LOCK) -->
+        <!-- ACCESSIBILITY SERVICE (HARD KIOSK & PREVENT TURN OFF) -->
         <service
             android:name=".SentryAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
