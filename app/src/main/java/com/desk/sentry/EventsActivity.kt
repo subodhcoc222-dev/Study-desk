@@ -1,6 +1,5 @@
 package com.desk.sentry
 
-import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -34,17 +33,14 @@ class EventsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. FORCE SHOW OVER LOCK SCREEN & PREVENT KEYGUARD BLOCKING
+        // Show directly over Lock Screen without requesting password dismiss
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            km.requestDismissKeyguard(this, null)
         }
         @Suppress("DEPRECATION")
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         )
@@ -64,11 +60,14 @@ class EventsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        SentryService.isAppInForeground = true
+        SentryService.isEventsActivityVisible = true
+        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
     }
 
     override fun onPause() {
         super.onPause()
+        SentryService.isEventsActivityVisible = false
+        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
     }
 
     private fun handleBackNavigation() {
@@ -398,12 +397,42 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * LEVEL 3: Full-Day Consolidated Report
+     * LEVEL 3: Full-Day Consolidated Report with Tamper-Proof Date Header
      */
     private fun showLevel3AllDaySummary(dateKey: String, dayName: String) {
         currentLevel = 3
         tvHeaderTitle.text = "All-Day Full Report"
         contentContainer.removeAllViews()
+
+        // 0. ANTI-CHEAT TAMPER-PROOF DATE & DAY VERIFICATION CARD
+        val verifyHeaderCard = CardView(this).apply {
+            radius = 16f
+            setCardBackgroundColor(Color.parseColor("#1E1B4B")) // Deep Indigo Header
+            cardElevation = 6f
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.setMargins(0, 0, 0, 14)
+            layoutParams = params
+        }
+        val verifyLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 16, 20, 16)
+        }
+        val tvDateStamp = TextView(this).apply {
+            text = "📅 REPORT DATE: $dayName"
+            textSize = 16f
+            setTextColor(Color.parseColor("#F59E0B")) // Bright Amber/Gold
+            setTypeface(null, Typeface.BOLD)
+        }
+        val tvDateKeySub = TextView(this).apply {
+            text = "🗓️ Record Date ID: $dateKey  •  🔒 Certified Desk Sentry System Log"
+            textSize = 12f
+            setTextColor(Color.parseColor("#A5B4FC"))
+            setPadding(0, 4, 0, 0)
+        }
+        verifyLayout.addView(tvDateStamp)
+        verifyLayout.addView(tvDateKeySub)
+        verifyHeaderCard.addView(verifyLayout)
+        contentContainer.addView(verifyHeaderCard)
 
         val dayJson = getDayJson(dateKey)
         val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
