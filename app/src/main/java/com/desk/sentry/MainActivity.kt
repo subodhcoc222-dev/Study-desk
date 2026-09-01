@@ -75,6 +75,10 @@ class MainActivity : AppCompatActivity() {
     private var isCurrentlyTakingAutoBreak: Boolean = false
     private var autoBreakStartMs: Long = 0L
 
+    // Quick Buffer Usage Trip State
+    private var isCurrentlyInBufferTrip: Boolean = false
+    private var bufferTripStartMs: Long = 0L
+
     // UI Components
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
@@ -86,6 +90,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchAlwaysActive: SwitchMaterial
     private lateinit var switchBgGuard: SwitchMaterial
     private lateinit var rgGracePeriod: RadioGroup
+    private lateinit var tvBufferLimitTitle: TextView
+    private lateinit var tvBufferRemainingLive: TextView
+    private lateinit var btnSetBufferLimit: Button
     private lateinit var tvAdminStatus: TextView
     private lateinit var btnActivateAdmin: Button
     private lateinit var btnChangePin: Button
@@ -121,7 +128,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Show directly over Lock Screen without password prompts
+        // Force Wake Screen on Lock & Keep Screen ON
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -146,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         loadAllSlots()
+        updateBufferLimitUI()
         initAlarmSound()
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -242,6 +250,7 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateAdminStatusUI()
         updateBreakBankUI()
+        updateBufferLimitUI()
         if (allPermissionsGranted() && cameraProvider == null) startCamera()
     }
 
@@ -251,10 +260,9 @@ class MainActivity : AppCompatActivity() {
         SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
     }
 
-    // Strict No-Negotiation: Back Button does nothing in MainActivity
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Ignored
+        // Strict No-Negotiation Mode: Ignore Back press
     }
 
     private fun initViews() {
@@ -268,6 +276,9 @@ class MainActivity : AppCompatActivity() {
         switchAlwaysActive = findViewById(R.id.switchAlwaysActive)
         switchBgGuard = findViewById(R.id.switchBgGuard)
         rgGracePeriod = findViewById(R.id.rgGracePeriod)
+        tvBufferLimitTitle = findViewById(R.id.tvBufferLimitTitle)
+        tvBufferRemainingLive = findViewById(R.id.tvBufferRemainingLive)
+        btnSetBufferLimit = findViewById(R.id.btnSetBufferLimit)
         tvAdminStatus = findViewById(R.id.tvAdminStatus)
         btnActivateAdmin = findViewById(R.id.btnActivateAdmin)
         btnChangePin = findViewById(R.id.btnChangePin)
@@ -356,7 +367,7 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
-                requirePinVerification("Change Free Buffer Period") {
+                requirePinVerification("Change Free Buffer Duration") {
                     absenceThresholdMs = when (rb.id) {
                         R.id.rb30s -> 30000L
                         R.id.rb1m -> 60000L
@@ -365,6 +376,12 @@ class MainActivity : AppCompatActivity() {
                     }
                     rgGracePeriod.check(rb.id)
                 }
+            }
+        }
+
+        btnSetBufferLimit.setOnClickListener {
+            requirePinVerification("Change Free Buffer Usage Limit") {
+                showSetBufferLimitDialog()
             }
         }
 
@@ -424,6 +441,69 @@ class MainActivity : AppCompatActivity() {
         }
         ringtonePickerLauncher.launch(intent)
     }
+
+    // ==========================================
+    // QUICK BUFFER USAGE LIMIT LOGIC
+    // ==========================================
+
+    private fun getBufferUsedCount(slotNum: Int): Int {
+        if (slotNum == -1) return 0
+        val dateKey = getTodayDateKey()
+        val key = "quick_buffer_used_${dateKey}_slot_$slotNum"
+        return prefs.getInt(key, 0)
+    }
+
+    private fun incrementBufferUsedCount(slotNum: Int) {
+        if (slotNum == -1) return
+        val dateKey = getTodayDateKey()
+        val key = "quick_buffer_used_${dateKey}_slot_$slotNum"
+        val current = prefs.getInt(key, 0)
+        prefs.edit().putInt(key, current + 1).apply()
+        updateBufferLimitUI()
+    }
+
+    private fun updateBufferLimitUI() {
+        val maxLimit = prefs.getInt("max_quick_buffer_count", 2)
+        val slotNum = if (currentActiveSlot != -1) currentActiveSlot else 1
+        val used = getBufferUsedCount(slotNum)
+        val left = (maxLimit - used).coerceAtLeast(0)
+
+        tvBufferLimitTitle.text = "🎯 Buffer Limit: $maxLimit Uses / Slot"
+        tvBufferRemainingLive.text = "Slot $slotNum: $used Used • $left Left"
+    }
+
+    private fun showSetBufferLimitDialog() {
+        val currentLimit = prefs.getInt("max_quick_buffer_count", 2)
+        val input = EditText(this).apply {
+            hint = "e.g. 2"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(currentLimit.toString())
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 20, 30, 20)
+        }
+        val container = LinearLayout(this).apply {
+            setPadding(50, 30, 50, 10)
+            addView(input)
+        }
+
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🎯 Set Quick Buffer Limit Per Slot")
+            .setMessage("Enter max number of free quick buffer breaks allowed in each study slot (e.g. 1, 2, 3, 4):")
+            .setView(container)
+            .setPositiveButton("Save Limit") { _, _ ->
+                val count = input.text.toString().trim().toIntOrNull() ?: currentLimit
+                prefs.edit().putInt("max_quick_buffer_count", count.coerceAtLeast(0)).apply()
+                updateBufferLimitUI()
+                Toast.makeText(this, "Quick Buffer Limit updated to $count uses/slot!", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ==========================================
+    // LANDSCAPE SLOT DIALOG
+    // ==========================================
 
     private fun showComprehensiveSlotDialog(slotNumber: Int) {
         val def = getDefaultSlotTimes(slotNumber)
@@ -568,6 +648,10 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ==========================================
+    // CUSTOM BREAK BANK LOGIC (PER SLOT)
+    // ==========================================
+
     data class SlotTimeConfig(
         val startH: Int,
         val startM: Int,
@@ -643,6 +727,10 @@ class MainActivity : AppCompatActivity() {
         json.put("slots", slots)
         saveDayJson(dateKey, json)
     }
+
+    // ==========================================
+    // MASTER PIN SYSTEM
+    // ==========================================
 
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
@@ -930,6 +1018,7 @@ class MainActivity : AppCompatActivity() {
                 val activeSlot = getActiveStudySlot()
                 currentActiveSlot = activeSlot
                 updateBreakBankUI()
+                updateBufferLimitUI()
 
                 if (activeSlot == -1) {
                     tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
@@ -938,29 +1027,51 @@ class MainActivity : AppCompatActivity() {
                     stopAlarmAndFinishAbsence()
                 } else {
                     val remainingBankSec = getRemainingBreakAllowanceSec(activeSlot)
+                    val usedBufferCount = getBufferUsedCount(activeSlot)
+                    val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+                    val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
                     if (isPersonCurrentlyPresent) {
+                        if (isCurrentlyInBufferTrip) {
+                            val durationMs = System.currentTimeMillis() - bufferTripStartMs
+                            if (durationMs >= 10000L) { // If away for at least 10s, consume 1 buffer count
+                                incrementBufferUsedCount(activeSlot)
+                            }
+                            isCurrentlyInBufferTrip = false
+                        }
+
                         tvLiveStatus.text = "● USER PRESENT & DETECTED"
                         tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
                         val m = remainingBankSec / 60
                         val s = remainingBankSec % 60
-                        tvCountdown.text = String.format("Desk Status: Normal | Break Bank: %02dm %02ds Left", m, s)
+                        val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
+                        tvCountdown.text = String.format("Desk Status: Normal | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
 
                         stopAlarmAndFinishAbsence()
                     } else {
                         val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
 
-                        if (awayDurationMs <= absenceThresholdMs) {
+                        if (hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs) {
+                            if (!isCurrentlyInBufferTrip) {
+                                isCurrentlyInBufferTrip = true
+                                bufferTripStartMs = System.currentTimeMillis()
+                            }
                             val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
-                            tvLiveStatus.text = "● QUICK BUFFER (FREE WASHROOM/WATER)"
+                            tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount + 1, maxBuffers)
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
                             tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Break Bank Not Used)"
                             stopAlarmAndFinishAbsence()
                         } else {
+                            if (isCurrentlyInBufferTrip) {
+                                incrementBufferUsedCount(activeSlot)
+                                isCurrentlyInBufferTrip = false
+                            }
+
                             if (remainingBankSec > 0) {
                                 val m = remainingBankSec / 60
                                 val s = remainingBankSec % 60
-                                tvLiveStatus.text = "☕ ON BREAK (AUTO-DEDUCTING BANK)"
+                                val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "AUTO-DEDUCTING"
+                                tvLiveStatus.text = "☕ ON BREAK ($reason)"
                                 tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
                                 tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
                                 stopAlarmAndFinishAbsence()
@@ -989,6 +1100,9 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 if (currentActiveSlot != -1) {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
+                    val usedBufferCount = getBufferUsedCount(currentActiveSlot)
+                    val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+                    val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
                     if (isPersonCurrentlyPresent) {
                         incrementPresentTime(currentActiveSlot, 1)
@@ -1000,8 +1114,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     } else {
                         val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                        val isInBufferTime = hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs
 
-                        if (awayDurationMs > absenceThresholdMs) {
+                        if (!isInBufferTime) {
                             if (remainingBank > 0) {
                                 setRemainingBreakAllowanceSec(currentActiveSlot, remainingBank - 1)
 
