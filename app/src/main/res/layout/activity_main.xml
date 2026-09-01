@@ -236,7 +236,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- QUICK BUFFER SELECTOR CARD -->
+                <!-- ENHANCED QUICK BUFFER SELECTOR & USAGE LIMIT CARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -249,12 +249,12 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:padding="6dp">
+                        android:padding="8dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="⏱️ Free Quick Buffer (Before Break Bank Starts):"
+                            android:text="⏱️ Free Quick Buffer Duration:"
                             android:textColor="#E2E8F0"
                             android:textSize="10sp"
                             android:textStyle="bold" />
@@ -302,6 +302,54 @@
                                 android:textColor="#94A3B8"
                                 android:textSize="10sp" />
                         </RadioGroup>
+
+                        <!-- BUFFER USAGE LIMIT ROW -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="#334155"
+                            android:layout_marginTop="4dp"
+                            android:layout_marginBottom="6dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvBufferLimitTitle"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="🎯 Buffer Limit: 2 Uses / Slot"
+                                    android:textColor="#38BDF8"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBufferRemainingLive"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Slot 1: 0 Used • 2 Left"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="9sp" />
+                            </LinearLayout>
+
+                            <Button
+                                android:id="@+id/btnSetBufferLimit"
+                                android:layout_width="wrap_content"
+                                android:layout_height="32dp"
+                                android:text="✏️ Limit"
+                                android:textSize="9sp"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#0284C7" />
+                        </LinearLayout>
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
