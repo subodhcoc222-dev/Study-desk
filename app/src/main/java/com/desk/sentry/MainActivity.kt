@@ -380,7 +380,6 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
-        // 10s, 1m, 3m, 5m Grace Period
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
@@ -893,6 +892,35 @@ class MainActivity : AppCompatActivity() {
         return -1
     }
 
+    /**
+     * 10-MINUTE PRE-SLOT SETUP WINDOW
+     * Returns Pair(isPreSlotActive, minutesToStart)
+     */
+    private fun getPreSlotWindowInfo(): Pair<Boolean, Int> {
+        val isSentryArmed = prefs.getBoolean("sentry_armed", true)
+        if (!isSentryArmed || isAlwaysActiveMode) return Pair(false, 0)
+
+        val now = Calendar.getInstance()
+        val currentDayOfWeek = now.get(Calendar.DAY_OF_WEEK)
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        for (i in 1..5) {
+            val isEnabled = prefs.getBoolean("slot_${i}_enabled", i <= 2)
+            if (isEnabled) {
+                val isDayActive = prefs.getBoolean("slot_${i}_day_$currentDayOfWeek", currentDayOfWeek != Calendar.SUNDAY)
+                if (isDayActive) {
+                    val def = getDefaultSlotTimes(i)
+                    val start = prefs.getInt("slot_${i}_start_h", def.startH) * 60 + prefs.getInt("slot_${i}_start_m", def.startM)
+                    val diff = start - currentMinutes
+                    if (diff in 1..10) {
+                        return Pair(true, diff)
+                    }
+                }
+            }
+        }
+        return Pair(false, 0)
+    }
+
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -900,11 +928,9 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = if (isUsingBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
 
-                // 1. Pose Detector Client
                 val poseOptions = PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build()
                 val poseDetector = PoseDetection.getClient(poseOptions)
 
-                // 2. Barcode (Visual Anchor) Scanner Client
                 val barcodeOptions = BarcodeScannerOptions.Builder()
                     .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                     .build()
@@ -939,9 +965,6 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /**
-     * CALIBRATED SPECIFICALLY FOR USER'S DESK POSTURE (INCLUDING BOWED HEAD WRITING)
-     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val minConfidence = 0.35f
 
@@ -971,7 +994,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Detect facial features or head top (even when bowed down writing)
         val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.18f) ||
                 (leftEye != null && leftEye.inFrameLikelihood >= 0.18f) ||
                 (rightEye != null && rightEye.inFrameLikelihood >= 0.18f) ||
@@ -980,7 +1002,6 @@ class MainActivity : AppCompatActivity() {
                 (leftMouth != null && leftMouth.inFrameLikelihood >= 0.18f) ||
                 (rightMouth != null && rightMouth.inFrameLikelihood >= 0.18f)
 
-        // Writing hands/arms detection
         val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.25f) ||
                 (rightWrist != null && rightWrist.inFrameLikelihood >= 0.25f) ||
                 (leftElbow != null && leftElbow.inFrameLikelihood >= 0.25f) ||
@@ -1016,7 +1037,6 @@ class MainActivity : AppCompatActivity() {
 
             val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
 
-            // 1. Process Pose Detection
             val poseTask = poseDetector.process(inputImage)
                 .addOnSuccessListener { pose ->
                     val frameValid = isRealDeskUser(pose, effWidth, effHeight)
@@ -1035,14 +1055,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-            // 2. Process Visual Anchor (QR Code on Wall)
             val barcodeTask = barcodeScanner.process(inputImage)
                 .addOnSuccessListener { barcodes ->
                     if (barcodes.isNotEmpty()) {
                         lastAnchorSeenTimestamp = System.currentTimeMillis()
                         isAnchorCurrentlyPresent = true
                     } else {
-                        // Smooth 3.5s retention so leaning forward doesn't momentarily drop anchor
                         isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                     }
                 }
@@ -1064,7 +1082,7 @@ class MainActivity : AppCompatActivity() {
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
-                // Both Student Pose + Wall Anchor must be verified
+                val (isPreSlotActive, minutesToStart) = getPreSlotWindowInfo()
                 val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                 val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
@@ -1073,11 +1091,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // ========================================================
-                // REAR CAMERA BLIND ALIGNMENT AUDIO FEEDBACK SYSTEM
+                // AUDIO BEACON LOGIC (SLOT + BREAK + BUFFER + 10M PRE-SLOT)
                 // ========================================================
+                val shouldAudioAssistBeActive = (activeSlot != -1) || isPreSlotActive
+
                 if (isFullyVerifiedAtDesk) {
                     if (!wasStationAlignedLastTick) {
-                        // POSITIVE CHIME: Camera is perfectly aligned!
                         try {
                             toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
                         } catch (e: Exception) {
@@ -1087,15 +1106,17 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     wasStationAlignedLastTick = false
-                    val now = System.currentTimeMillis()
-                    // GENTLE SEARCHING BEEP (every 1.8s) while aligning phone on stand
-                    if (now - lastAdjustmentBeepMs > 1800L) {
-                        try {
-                            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 100)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                    // 100% Active in slot, buffer, break & 10m pre-slot window (Silent in standby)
+                    if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastAdjustmentBeepMs > 1800L) {
+                            try {
+                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 100)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                            lastAdjustmentBeepMs = now
                         }
-                        lastAdjustmentBeepMs = now
                     }
                 }
 
@@ -1103,9 +1124,15 @@ class MainActivity : AppCompatActivity() {
                 // CORE DISCIPLINE LOGIC
                 // ========================================================
                 if (activeSlot == -1) {
-                    tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
-                    tvLiveStatus.setTextColor(Color.GRAY)
-                    tvCountdown.text = "Schedule: Inactive"
+                    if (isPreSlotActive) {
+                        tvLiveStatus.text = "⏱️ PRE-SLOT SETUP ($minutesToStart MIN TO START)"
+                        tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                        tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Audio Beacon Active • Set Phone on Stand"
+                    } else {
+                        tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
+                        tvLiveStatus.setTextColor(Color.GRAY)
+                        tvCountdown.text = "Schedule: Inactive (Silent Mode)"
+                    }
                     stopAlarmAndFinishAbsence()
                 } else {
                     val remainingBankSec = getRemainingBreakAllowanceSec(activeSlot)
@@ -1141,7 +1168,7 @@ class MainActivity : AppCompatActivity() {
                             val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
                             tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount + 1, maxBuffers)
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                            tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Break Bank Not Used)"
+                            tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Beacon Active)"
                             stopAlarmAndFinishAbsence()
                         } else {
                             if (isCurrentlyInBufferTrip) {
@@ -1156,7 +1183,7 @@ class MainActivity : AppCompatActivity() {
                                 val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
                                 tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
                                 tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
+                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Beacon Active)", m, s)
                                 stopAlarmAndFinishAbsence()
                             } else {
                                 tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
