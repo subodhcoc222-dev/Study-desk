@@ -15,6 +15,7 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -34,7 +35,11 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.tasks.Tasks
 import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
@@ -55,7 +60,10 @@ class MainActivity : AppCompatActivity() {
     private var absenceThresholdMs = 180000L // Default 3 mins buffer
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
+    private var isAnchorCurrentlyPresent = false
+    private var lastAnchorSeenTimestamp = 0L
     private var mediaPlayer: MediaPlayer? = null
+    private var toneGenerator: ToneGenerator? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
@@ -63,7 +71,7 @@ class MainActivity : AppCompatActivity() {
     // Anti-Ghosting Frame Confirmation
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
-    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 8
+    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 5
     private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6
 
     // Real-Time Analytics State
@@ -78,6 +86,10 @@ class MainActivity : AppCompatActivity() {
     // Quick Buffer Usage Trip State
     private var isCurrentlyInBufferTrip: Boolean = false
     private var bufferTripStartMs: Long = 0L
+
+    // Rear Camera Alignment Sound State
+    private var wasStationAlignedLastTick = false
+    private var lastAdjustmentBeepMs = 0L
 
     // UI Components
     private lateinit var previewView: PreviewView
@@ -106,7 +118,6 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastTapTime = 0L
 
-    // Ringtone Picker Result Handler
     private val ringtonePickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val uri: Uri? = result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
@@ -128,7 +139,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Force Wake Screen on Lock & Keep Screen ON
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -144,6 +154,12 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         checkAllPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
@@ -262,7 +278,7 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Strict No-Negotiation Mode: Ignore Back press
+        // Strict No-Negotiation: Back Button does nothing
     }
 
     private fun initViews() {
@@ -364,12 +380,13 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
+        // 10s, 1m, 3m, 5m Grace Period
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
                 requirePinVerification("Change Free Buffer Duration") {
                     absenceThresholdMs = when (rb.id) {
-                        R.id.rb30s -> 30000L
+                        R.id.rb10s -> 10000L
                         R.id.rb1m -> 60000L
                         R.id.rb5m -> 300000L
                         else -> 180000L
@@ -442,10 +459,6 @@ class MainActivity : AppCompatActivity() {
         ringtonePickerLauncher.launch(intent)
     }
 
-    // ==========================================
-    // QUICK BUFFER USAGE LIMIT LOGIC
-    // ==========================================
-
     private fun getBufferUsedCount(slotNum: Int): Int {
         if (slotNum == -1) return 0
         val dateKey = getTodayDateKey()
@@ -489,21 +502,17 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🎯 Set Quick Buffer Limit Per Slot")
-            .setMessage("Enter max number of free quick buffer breaks allowed in each study slot (e.g. 1, 2, 3, 4):")
+            .setMessage("Enter max number of free quick buffer breaks allowed in each study slot:")
             .setView(container)
             .setPositiveButton("Save Limit") { _, _ ->
                 val count = input.text.toString().trim().toIntOrNull() ?: currentLimit
                 prefs.edit().putInt("max_quick_buffer_count", count.coerceAtLeast(0)).apply()
                 updateBufferLimitUI()
-                Toast.makeText(this, "Quick Buffer Limit updated to $count uses/slot!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Buffer limit updated to $count uses/slot!", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
-
-    // ==========================================
-    // LANDSCAPE SLOT DIALOG
-    // ==========================================
 
     private fun showComprehensiveSlotDialog(slotNumber: Int) {
         val def = getDefaultSlotTimes(slotNumber)
@@ -648,10 +657,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ==========================================
-    // CUSTOM BREAK BANK LOGIC (PER SLOT)
-    // ==========================================
-
     data class SlotTimeConfig(
         val startH: Int,
         val startM: Int,
@@ -728,10 +733,6 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
-    // ==========================================
-    // MASTER PIN SYSTEM
-    // ==========================================
-
     private fun showFirstTimeSetPinDialog() {
         val input = EditText(this).apply {
             hint = "Create 4-digit Master PIN"
@@ -743,7 +744,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Set Master Security PIN")
-            .setMessage("Welcome to Desk Sentry! Please create your master PIN. Give this PIN to your accountability partner.")
+            .setMessage("Welcome to Desk Sentry! Please create your master PIN.")
             .setView(container)
             .setCancelable(false)
             .setPositiveButton("Save PIN", null)
@@ -754,7 +755,7 @@ class MainActivity : AppCompatActivity() {
                 val pin = input.text.toString().trim()
                 if (pin.length >= 4) {
                     prefs.edit().putString("user_pin", pin).apply()
-                    Toast.makeText(this, "Master PIN Saved Successfully!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Master PIN Saved!", Toast.LENGTH_SHORT).show()
                     dialog.dismiss()
                 } else {
                     Toast.makeText(this, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
@@ -782,7 +783,7 @@ class MainActivity : AppCompatActivity() {
                 if (input.text.toString().trim() == savedPin) {
                     onVerified()
                 } else {
-                    Toast.makeText(this, "Incorrect PIN! Changes not permitted.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Incorrect PIN!", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -831,7 +832,7 @@ class MainActivity : AppCompatActivity() {
                 val newPin = inputNew.text.toString().trim()
                 if (newPin.length >= 4) {
                     prefs.edit().putString("user_pin", newPin).apply()
-                    Toast.makeText(this, "Master PIN updated successfully!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Master PIN updated!", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this, "PIN must be at least 4 digits!", Toast.LENGTH_SHORT).show()
                 }
@@ -899,8 +900,15 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = if (isUsingBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
 
-                val options = PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build()
-                val poseDetector = PoseDetection.getClient(options)
+                // 1. Pose Detector Client
+                val poseOptions = PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build()
+                val poseDetector = PoseDetection.getClient(poseOptions)
+
+                // 2. Barcode (Visual Anchor) Scanner Client
+                val barcodeOptions = BarcodeScannerOptions.Builder()
+                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                    .build()
+                val barcodeScanner = BarcodeScanning.getClient(barcodeOptions)
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val imageAnalysis = ImageAnalysis.Builder()
@@ -909,7 +917,7 @@ class MainActivity : AppCompatActivity() {
                     .build()
 
                 imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                    processCameraFrame(imageProxy, poseDetector)
+                    processCameraFrame(imageProxy, poseDetector, barcodeScanner)
                 }
 
                 cameraProvider?.unbindAll()
@@ -931,8 +939,11 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * CALIBRATED SPECIFICALLY FOR USER'S DESK POSTURE (INCLUDING BOWED HEAD WRITING)
+     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val minConfidence = 0.40f
+        val minConfidence = 0.35f
 
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
@@ -943,6 +954,10 @@ class MainActivity : AppCompatActivity() {
         val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
         val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
         val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
+        val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST)
+        val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST)
+        val leftElbow = pose.getPoseLandmark(PoseLandmark.LEFT_ELBOW)
+        val rightElbow = pose.getPoseLandmark(PoseLandmark.RIGHT_ELBOW)
 
         val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
         val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
@@ -956,13 +971,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.30f) ||
-                (leftEye != null && leftEye.inFrameLikelihood >= 0.30f) ||
-                (rightEye != null && rightEye.inFrameLikelihood >= 0.30f) ||
-                (leftEar != null && leftEar.inFrameLikelihood >= 0.30f) ||
-                (rightEar != null && rightEar.inFrameLikelihood >= 0.30f) ||
-                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.30f) ||
-                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.30f)
+        // Detect facial features or head top (even when bowed down writing)
+        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.18f) ||
+                (leftEye != null && leftEye.inFrameLikelihood >= 0.18f) ||
+                (rightEye != null && rightEye.inFrameLikelihood >= 0.18f) ||
+                (leftEar != null && leftEar.inFrameLikelihood >= 0.18f) ||
+                (rightEar != null && rightEar.inFrameLikelihood >= 0.18f) ||
+                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.18f) ||
+                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.18f)
+
+        // Writing hands/arms detection
+        val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.25f) ||
+                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.25f) ||
+                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.25f) ||
+                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.25f)
 
         val refY = if (hasLeftShoulder && hasRightShoulder) {
             (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
@@ -976,11 +998,15 @@ class MainActivity : AppCompatActivity() {
             return false
         }
 
-        return hasHeadOrFace
+        return hasHeadOrFace || hasWritingArms
     }
 
     @SuppressLint("UnsafeOptInUsageError")
-    private fun processCameraFrame(imageProxy: ImageProxy, poseDetector: com.google.mlkit.vision.pose.PoseDetector) {
+    private fun processCameraFrame(
+        imageProxy: ImageProxy,
+        poseDetector: com.google.mlkit.vision.pose.PoseDetector,
+        barcodeScanner: com.google.mlkit.vision.barcode.BarcodeScanner
+    ) {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
             val rotation = imageProxy.imageInfo.rotationDegrees
@@ -988,7 +1014,10 @@ class MainActivity : AppCompatActivity() {
             val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
             val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
 
-            poseDetector.process(InputImage.fromMediaImage(mediaImage, rotation))
+            val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
+
+            // 1. Process Pose Detection
+            val poseTask = poseDetector.process(inputImage)
                 .addOnSuccessListener { pose ->
                     val frameValid = isRealDeskUser(pose, effWidth, effHeight)
                     if (frameValid) {
@@ -996,7 +1025,6 @@ class MainActivity : AppCompatActivity() {
                         sustainedAbsentFrameCount = 0
                         if (sustainedPresentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_PRESENT) {
                             isPersonCurrentlyPresent = true
-                            lastSeenTimestamp = System.currentTimeMillis()
                         }
                     } else {
                         sustainedAbsentFrameCount++
@@ -1006,7 +1034,23 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-                .addOnCompleteListener { imageProxy.close() }
+
+            // 2. Process Visual Anchor (QR Code on Wall)
+            val barcodeTask = barcodeScanner.process(inputImage)
+                .addOnSuccessListener { barcodes ->
+                    if (barcodes.isNotEmpty()) {
+                        lastAnchorSeenTimestamp = System.currentTimeMillis()
+                        isAnchorCurrentlyPresent = true
+                    } else {
+                        // Smooth 3.5s retention so leaning forward doesn't momentarily drop anchor
+                        isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
+                    }
+                }
+
+            Tasks.whenAllComplete(poseTask, barcodeTask)
+                .addOnCompleteListener {
+                    imageProxy.close()
+                }
         } else {
             imageProxy.close()
         }
@@ -1020,6 +1064,44 @@ class MainActivity : AppCompatActivity() {
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
+                // Both Student Pose + Wall Anchor must be verified
+                val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
+                val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
+
+                if (isFullyVerifiedAtDesk) {
+                    lastSeenTimestamp = System.currentTimeMillis()
+                }
+
+                // ========================================================
+                // REAR CAMERA BLIND ALIGNMENT AUDIO FEEDBACK SYSTEM
+                // ========================================================
+                if (isFullyVerifiedAtDesk) {
+                    if (!wasStationAlignedLastTick) {
+                        // POSITIVE CHIME: Camera is perfectly aligned!
+                        try {
+                            toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        wasStationAlignedLastTick = true
+                    }
+                } else {
+                    wasStationAlignedLastTick = false
+                    val now = System.currentTimeMillis()
+                    // GENTLE SEARCHING BEEP (every 1.8s) while aligning phone on stand
+                    if (now - lastAdjustmentBeepMs > 1800L) {
+                        try {
+                            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 100)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        lastAdjustmentBeepMs = now
+                    }
+                }
+
+                // ========================================================
+                // CORE DISCIPLINE LOGIC
+                // ========================================================
                 if (activeSlot == -1) {
                     tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
                     tvLiveStatus.setTextColor(Color.GRAY)
@@ -1031,21 +1113,21 @@ class MainActivity : AppCompatActivity() {
                     val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                     val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
-                    if (isPersonCurrentlyPresent) {
+                    if (isFullyVerifiedAtDesk) {
                         if (isCurrentlyInBufferTrip) {
                             val durationMs = System.currentTimeMillis() - bufferTripStartMs
-                            if (durationMs >= 10000L) { // If away for at least 10s, consume 1 buffer count
+                            if (durationMs >= 10000L) {
                                 incrementBufferUsedCount(activeSlot)
                             }
                             isCurrentlyInBufferTrip = false
                         }
 
-                        tvLiveStatus.text = "● USER PRESENT & DETECTED"
+                        tvLiveStatus.text = "● STATION LOCKED (STUDENT + ANCHOR VERIFIED)"
                         tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
                         val m = remainingBankSec / 60
                         val s = remainingBankSec % 60
                         val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
-                        tvCountdown.text = String.format("Desk Status: Normal | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
+                        tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
 
                         stopAlarmAndFinishAbsence()
                     } else {
@@ -1071,7 +1153,8 @@ class MainActivity : AppCompatActivity() {
                                 val m = remainingBankSec / 60
                                 val s = remainingBankSec % 60
                                 val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "AUTO-DEDUCTING"
-                                tvLiveStatus.text = "☕ ON BREAK ($reason)"
+                                val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
+                                tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
                                 tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
                                 tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
                                 stopAlarmAndFinishAbsence()
@@ -1103,8 +1186,10 @@ class MainActivity : AppCompatActivity() {
                     val usedBufferCount = getBufferUsedCount(currentActiveSlot)
                     val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                     val hasFreeBufferLeft = usedBufferCount < maxBuffers
+                    val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
+                    val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
-                    if (isPersonCurrentlyPresent) {
+                    if (isFullyVerifiedAtDesk) {
                         incrementPresentTime(currentActiveSlot, 1)
 
                         if (isCurrentlyTakingAutoBreak) {
@@ -1303,5 +1388,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         mediaPlayer?.release()
         mediaPlayer = null
+        toneGenerator?.release()
+        toneGenerator = null
     }
 }
