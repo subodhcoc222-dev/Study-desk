@@ -17,12 +17,15 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.media.ToneGenerator
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -57,7 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = true
     private var isAlwaysActiveMode = false
-    private var absenceThresholdMs = 180000L // Default 3 mins buffer
+    private var absenceThresholdMs = 180000L // Default 3 mins buffer (Gold Standard)
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var isAnchorCurrentlyPresent = false
@@ -76,6 +79,7 @@ class MainActivity : AppCompatActivity() {
 
     // Real-Time Analytics State
     private var currentActiveSlot: Int = -1
+    private var lastTrackedSlot: Int = -1
     private var alarmTriggerStartMs: Long = 0L
     private var isAlarmCurrentlyTracking: Boolean = false
 
@@ -90,6 +94,23 @@ class MainActivity : AppCompatActivity() {
     // Rear Camera Alignment Sound State
     private var wasStationAlignedLastTick = false
     private var lastAdjustmentBeepMs = 0L
+
+    // -------------------------------------------------------------
+    // ADVANCED AI SPEECH & AUTOMATION STATES
+    // -------------------------------------------------------------
+    private var tts: TextToSpeech? = null
+    private var isTtsReady = false
+    private var isTtsSpeaking = false
+
+    private enum class AbsenceState { NONE, BUFFER, BREAK }
+    private var currentAbsenceState = AbsenceState.NONE
+    private var currentBufferTripNum = 0
+    private var deskLostTimestamp = 0L
+    private var hasAnnouncedExitForCurrentAbsence = false
+
+    private val slotLaunchAnnounced = BooleanArray(6) { false }
+    private val preSlotReadyAnnounced = BooleanArray(6) { false }
+    private var hasAnnouncedLowBattery = false
 
     // UI Components
     private lateinit var previewView: PreviewView
@@ -156,11 +177,12 @@ class MainActivity : AppCompatActivity() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 85)
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
+        initTTS()
         checkAllPermissions()
         if (prefs.getBoolean("bg_guard_enabled", true)) {
             startPersistentBackgroundService()
@@ -186,6 +208,55 @@ class MainActivity : AppCompatActivity() {
 
         startMonitoringLoop()
         startPeriodicTimeTracker()
+    }
+
+    private fun initTTS() {
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                val inLocale = Locale("en", "IN")
+                val result = tts?.setLanguage(inLocale)
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts?.setLanguage(Locale.ENGLISH)
+                }
+                tts?.setSpeechRate(0.85f)
+                tts?.setPitch(1.0f)
+                val audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                tts?.setAudioAttributes(audioAttributes)
+                isTtsReady = true
+            }
+        }
+
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                isTtsSpeaking = true
+            }
+            override fun onDone(utteranceId: String?) {
+                isTtsSpeaking = false
+            }
+            override fun onError(utteranceId: String?) {
+                isTtsSpeaking = false
+            }
+        })
+    }
+
+    private fun speak(text: String) {
+        if (!isTtsReady || tts == null) return
+        mainHandler.post {
+            val utteranceId = UUID.randomUUID().toString()
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        }
+    }
+
+    private fun getBatteryPercentage(): Int {
+        return try {
+            val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        } catch (e: Exception) {
+            -1
+        }
     }
 
     private fun checkAllPermissions() {
@@ -380,6 +451,7 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
+        // 10s, 1m, 2m, 3m (Default 3m) Buffer Options
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
@@ -387,7 +459,8 @@ class MainActivity : AppCompatActivity() {
                     absenceThresholdMs = when (rb.id) {
                         R.id.rb10s -> 10000L
                         R.id.rb1m -> 60000L
-                        R.id.rb5m -> 300000L
+                        R.id.rb2m -> 120000L
+                        R.id.rb3m -> 180000L
                         else -> 180000L
                     }
                     rgGracePeriod.check(rb.id)
@@ -894,7 +967,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 10-MINUTE PRE-SLOT SETUP WINDOW
-     * Returns Pair(isPreSlotActive, minutesToStart)
+     * Returns Pair(isPreSlotActive, slotNumber)
      */
     private fun getPreSlotWindowInfo(): Pair<Boolean, Int> {
         val isSentryArmed = prefs.getBoolean("sentry_armed", true)
@@ -913,7 +986,7 @@ class MainActivity : AppCompatActivity() {
                     val start = prefs.getInt("slot_${i}_start_h", def.startH) * 60 + prefs.getInt("slot_${i}_start_m", def.startM)
                     val diff = start - currentMinutes
                     if (diff in 1..10) {
-                        return Pair(true, diff)
+                        return Pair(true, i)
                     }
                 }
             }
@@ -965,6 +1038,9 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * CALIBRATED SPECIFICALLY FOR USER'S DESK POSTURE (INCLUDING BOWED HEAD WRITING)
+     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val minConfidence = 0.35f
 
@@ -1078,11 +1154,18 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post(object : Runnable {
             override fun run() {
                 val activeSlot = getActiveStudySlot()
+                val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
+
+                // Detect Slot Completion
+                if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode) {
+                    speak("Study Slot $lastTrackedSlot completed. Great session. You can take your break now.")
+                }
+                lastTrackedSlot = activeSlot
                 currentActiveSlot = activeSlot
+
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
-                val (isPreSlotActive, minutesToStart) = getPreSlotWindowInfo()
                 val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                 val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
@@ -1091,11 +1174,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // ========================================================
-                // AUDIO BEACON LOGIC (SLOT + BREAK + BUFFER + 10M PRE-SLOT)
+                // 1. DUAL PRESENCE ENTRY & HARDWARE CHIME LOGIC
                 // ========================================================
-                val shouldAudioAssistBeActive = (activeSlot != -1) || isPreSlotActive
-
                 if (isFullyVerifiedAtDesk) {
+                    deskLostTimestamp = 0L
+                    hasAnnouncedExitForCurrentAbsence = false
+
                     if (!wasStationAlignedLastTick) {
                         try {
                             toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
@@ -1103,11 +1187,76 @@ class MainActivity : AppCompatActivity() {
                             e.printStackTrace()
                         }
                         wasStationAlignedLastTick = true
+
+                        // ENTRY ANNOUNCEMENT FLOW (with 400ms buffer so chime finishes)
+                        if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
+                            slotLaunchAnnounced[activeSlot] = true
+                            mainHandler.postDelayed({
+                                speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!")
+                            }, 400)
+                        } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
+                            preSlotReadyAnnounced[preSlotNum] = true
+                            val bat = getBatteryPercentage()
+                            val batStr = if (bat > 0) "Battery $bat percent." else "Battery ready."
+                            mainHandler.postDelayed({
+                                speak("Camera ready. $batStr")
+                            }, 400)
+                        } else if (currentAbsenceState == AbsenceState.BUFFER) {
+                            val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+                            val used = getBufferUsedCount(activeSlot)
+                            val left = (maxBuffers - used).coerceAtLeast(0)
+                            val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                            val bNum = currentBufferTripNum
+                            mainHandler.postDelayed({
+                                speak("Buffer $bNum complete. $leftStr.")
+                            }, 400)
+                            currentAbsenceState = AbsenceState.NONE
+                        } else if (currentAbsenceState == AbsenceState.BREAK) {
+                            val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                            val mins = (remainingSec / 60).toInt()
+                            mainHandler.postDelayed({
+                                speak("Break paused. $mins minutes left.")
+                            }, 400)
+                            currentAbsenceState = AbsenceState.NONE
+                        }
                     }
                 } else {
                     wasStationAlignedLastTick = false
-                    // 100% Active in slot, buffer, break & 10m pre-slot window (Silent in standby)
-                    if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true) {
+                    if (deskLostTimestamp == 0L) {
+                        deskLostTimestamp = System.currentTimeMillis()
+                    }
+
+                    // 2-SECOND FALSE-EXIT DEBOUNCE (e.g. picking up fallen pen)
+                    val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
+                    if (awaySinceMs >= 2000L && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
+                        val usedBufferCount = getBufferUsedCount(activeSlot)
+                        val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+
+                        if (usedBufferCount < maxBuffers) {
+                            // Quick Buffer Trip
+                            incrementBufferUsedCount(activeSlot)
+                            currentBufferTripNum = usedBufferCount + 1
+                            val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
+                            val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                            speak("Buffer $currentBufferTripNum on. $leftStr.")
+                            currentAbsenceState = AbsenceState.BUFFER
+                        } else {
+                            // Official Break Bank Trip
+                            val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                            val mins = (remainingSec / 60).toInt()
+                            if (mins >= 1) {
+                                speak("Break on. $mins minutes left.")
+                            } else {
+                                speak("Break ending. Under one minute left.")
+                            }
+                            currentAbsenceState = AbsenceState.BREAK
+                        }
+                        hasAnnouncedExitForCurrentAbsence = true
+                    }
+
+                    // AUDIO BEACON SEARCHING BEEP (Every 1.8s while away or setting up)
+                    val shouldAudioAssistBeActive = (activeSlot != -1) || isPreSlotActive
+                    if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
                         val now = System.currentTimeMillis()
                         if (now - lastAdjustmentBeepMs > 1800L) {
                             try {
@@ -1121,13 +1270,13 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // ========================================================
-                // CORE DISCIPLINE LOGIC
+                // 2. CORE DISCIPLINE AND ALARM LOGIC
                 // ========================================================
                 if (activeSlot == -1) {
                     if (isPreSlotActive) {
-                        tvLiveStatus.text = "⏱️ PRE-SLOT SETUP ($minutesToStart MIN TO START)"
+                        tvLiveStatus.text = "⏱️ PRE-SLOT SETUP (SLOT $preSlotNum)"
                         tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                        tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Audio Beacon Active • Set Phone on Stand"
+                        tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Audio Beacon Active • Align Phone on Stand"
                     } else {
                         tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
                         tvLiveStatus.setTextColor(Color.GRAY)
@@ -1141,41 +1290,23 @@ class MainActivity : AppCompatActivity() {
                     val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
                     if (isFullyVerifiedAtDesk) {
-                        if (isCurrentlyInBufferTrip) {
-                            val durationMs = System.currentTimeMillis() - bufferTripStartMs
-                            if (durationMs >= 10000L) {
-                                incrementBufferUsedCount(activeSlot)
-                            }
-                            isCurrentlyInBufferTrip = false
-                        }
-
                         tvLiveStatus.text = "● STATION LOCKED (STUDENT + ANCHOR VERIFIED)"
                         tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
                         val m = remainingBankSec / 60
                         val s = remainingBankSec % 60
                         val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
                         tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
-
                         stopAlarmAndFinishAbsence()
                     } else {
                         val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
 
                         if (hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs) {
-                            if (!isCurrentlyInBufferTrip) {
-                                isCurrentlyInBufferTrip = true
-                                bufferTripStartMs = System.currentTimeMillis()
-                            }
                             val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
-                            tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount + 1, maxBuffers)
+                            tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount, maxBuffers)
                             tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
                             tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Beacon Active)"
                             stopAlarmAndFinishAbsence()
                         } else {
-                            if (isCurrentlyInBufferTrip) {
-                                incrementBufferUsedCount(activeSlot)
-                                isCurrentlyInBufferTrip = false
-                            }
-
                             if (remainingBankSec > 0) {
                                 val m = remainingBankSec / 60
                                 val s = remainingBankSec % 60
@@ -1183,7 +1314,7 @@ class MainActivity : AppCompatActivity() {
                                 val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
                                 tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
                                 tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Beacon Active)", m, s)
+                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
                                 stopAlarmAndFinishAbsence()
                             } else {
                                 tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
@@ -1215,6 +1346,15 @@ class MainActivity : AppCompatActivity() {
                     val hasFreeBufferLeft = usedBufferCount < maxBuffers
                     val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                     val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
+
+                    // Low Battery Check (< 20%)
+                    val bat = getBatteryPercentage()
+                    if (bat in 1..20 && !hasAnnouncedLowBattery) {
+                        hasAnnouncedLowBattery = true
+                        speak("Alert: Battery low at $bat percent. Please connect charger.")
+                    } else if (bat > 25) {
+                        hasAnnouncedLowBattery = false
+                    }
 
                     if (isFullyVerifiedAtDesk) {
                         incrementPresentTime(currentActiveSlot, 1)
@@ -1417,5 +1557,8 @@ class MainActivity : AppCompatActivity() {
         mediaPlayer = null
         toneGenerator?.release()
         toneGenerator = null
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
     }
 }
