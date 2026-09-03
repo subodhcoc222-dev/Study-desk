@@ -71,11 +71,11 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Rock-Solid Presence Confidence Score
+    // Rock-Solid Rolling Presence Confidence Score
     private var presenceConfidenceScore = 0
     private val ANCHOR_OCCLUSION_TOLERANCE_MS = 15000L // 15s memory for far background QR
 
-    // Voice Diagnostic State Machine
+    // Polite Alignment Diagnostic State Machine
     private var lastSpokenDiagnostic = ""
     private var lastDiagnosticSpokenTimestamp = 0L
     private var diagnosticDebounceState = ""
@@ -177,7 +177,7 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
 
-        initTTS()
+        initJarvisTTS()
         checkAllPermissions()
         checkAndProcessDeviceShutdownRecovery()
 
@@ -263,21 +263,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun initTTS() {
+    /**
+     * JARVIS BRITISH AI VOICE TUNING:
+     * British male accent, calibrated low pitch for deep presence, dignified pacing.
+     */
+    private fun initJarvisTTS() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val inLocale = Locale("en", "IN")
-                val result = tts?.setLanguage(inLocale)
+                val ukLocale = Locale.UK
+                val result = tts?.setLanguage(ukLocale)
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     tts?.setLanguage(Locale.ENGLISH)
                 }
+
+                // Jarvis Persona: 0.92f Pitch (Deep resonance), 0.88f Speed (Articulate British cadence)
+                tts?.setPitch(0.92f)
                 tts?.setSpeechRate(0.88f)
-                tts?.setPitch(1.0f)
+
+                // Select British Male voice if present in system voices
+                try {
+                    val voices = tts?.voices
+                    val jarvisVoice = voices?.firstOrNull { v ->
+                        v.locale.language == Locale.UK.language &&
+                        (v.name.contains("male", ignoreCase = true) || v.name.contains("en-gb", ignoreCase = true)) &&
+                        !v.isNetworkConnectionRequired
+                    } ?: voices?.firstOrNull { it.locale.language == Locale.UK.language }
+                    if (jarvisVoice != null) {
+                        tts?.voice = jarvisVoice
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
 
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(1) // FLAG_AUDIBILITY_ENFORCED
+                    .setFlags(1) // Dual-hardware routing flag
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -291,11 +312,16 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun speak(text: String) {
+    /**
+     * PROFESSIONAL AUDIO QUEUE:
+     * Never truncates sentences. Uses QUEUE_ADD for unbroken, dignified speech.
+     */
+    private fun speak(text: String, flush: Boolean = false) {
         if (!isTtsReady || tts == null) return
         mainHandler.post {
             val utteranceId = UUID.randomUUID().toString()
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            val queueMode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            tts?.speak(text, queueMode, null, utteranceId)
         }
     }
 
@@ -411,7 +437,7 @@ class MainActivity : AppCompatActivity() {
             val target = !current
             prefs.edit().putBoolean("require_qr_anchor", target).apply()
             val msg = if (target) "Dual Guard Active: User + QR Anchor Required" else "Pose Guard Active: QR Anchor Disabled"
-            speak(if (target) "Dual Guard enabled. QR anchor required." else "Pose Guard enabled. QR anchor disabled.")
+            speak(if (target) "Dual Guard engaged, sir. Anchor verification active." else "Pose Guard engaged, sir. Anchor requirement disabled.", true)
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             true
         }
@@ -427,6 +453,7 @@ class MainActivity : AppCompatActivity() {
                 startPersistentBackgroundService()
                 isArmingGraceActive = true
                 armingGraceRemainingSec = 45
+                speak("Sentry protocol armed, sir. 45 seconds to secure device on stand.", true)
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
             } else {
                 requirePinVerification("Disarm Master Sentry & Unlock Device") {
@@ -437,6 +464,8 @@ class MainActivity : AppCompatActivity() {
                     stopAlarmAndFinishAbsence()
                     isArmingGraceActive = false
                     isAudioRadarActive = false
+                    tts?.stop()
+                    speak("Sentry disarmed. System unlocked, sir.", true)
                     Toast.makeText(this, "Sentry Disarmed. System Unlocked.", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -450,6 +479,7 @@ class MainActivity : AppCompatActivity() {
                 isAlwaysActiveMode = target
                 prefs.edit().putBoolean("always_active_mode", target).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
+                speak(if (target) "Override mode engaged, sir." else "Standard schedule restored, sir.", true)
             }
         }
 
@@ -981,7 +1011,7 @@ class MainActivity : AppCompatActivity() {
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-                // FULL 1080P HD FOR MAXIMUM DISTANT QR SHARPNESS
+                // FULL 1080P HD (1920x1080) FOR RAZOR SHARP DISTANT QR READING
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
@@ -1153,7 +1183,7 @@ class MainActivity : AppCompatActivity() {
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
 
                 if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode && isSentryArmed) {
-                    speak("Study Slot $lastTrackedSlot completed. Great session. You can take your break now.")
+                    speak("Study Slot $lastTrackedSlot concluded, sir. Exceptional focus. You may stand down for break.")
                 }
                 lastTrackedSlot = activeSlot
                 currentActiveSlot = activeSlot
@@ -1166,42 +1196,68 @@ class MainActivity : AppCompatActivity() {
                 val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
                 val now = System.currentTimeMillis()
+                val awaySinceMs = if (deskLostTimestamp > 0L) now - deskLostTimestamp else 0L
 
-                // =========================================================
-                // INTELLIGENT VOICE DIAGNOSTIC ENGINE (REAR CAMERA EYE)
-                // =========================================================
-                val currentDiag = when {
-                    isPersonCurrentlyPresent && isAnchorValid -> "VERIFIED"
-                    isPersonCurrentlyPresent && !isAnchorValid -> "USER_OK_QR_MISSING"
-                    !isPersonCurrentlyPresent && isAnchorValid -> "USER_MISSING_QR_OK"
-                    else -> "BOTH_MISSING"
-                }
+                // =========================================================================
+                // POLITE JARVIS DIAGNOSTIC ENGINE:
+                // STRICTLY SILENT during intentional buffers, breaks, or when away!
+                // ONLY assists when user is sitting at desk with QR missing or pre-slot setup.
+                // =========================================================================
+                val isUserOnLegitimateAbsence = (currentAbsenceState != AbsenceState.NONE) ||
+                        hasAnnouncedExitForCurrentAbsence ||
+                        (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS)
 
-                if (currentDiag != diagnosticDebounceState) {
-                    diagnosticDebounceState = currentDiag
-                    diagnosticDebounceStartTime = now
-                }
+                if (isSentryArmed && !isUserOnLegitimateAbsence) {
+                    if (isPreSlotActive || isArmingGraceActive) {
+                        val currentDiag = when {
+                            isPersonCurrentlyPresent && isAnchorValid -> "VERIFIED"
+                            isPersonCurrentlyPresent && !isAnchorValid -> "USER_OK_QR_MISSING"
+                            !isPersonCurrentlyPresent && isAnchorValid -> "STAND_READY_USER_MISSING"
+                            else -> "SETUP_INCOMPLETE"
+                        }
 
-                val hasStateStabilized = (now - diagnosticDebounceStartTime) >= 1200L
-                val shouldGiveVoiceFeedback = isSentryArmed && (activeSlot != -1 || isPreSlotActive || isArmingGraceActive)
+                        if (currentDiag != diagnosticDebounceState) {
+                            diagnosticDebounceState = currentDiag
+                            diagnosticDebounceStartTime = now
+                        }
 
-                if (shouldGiveVoiceFeedback && hasStateStabilized) {
-                    val isNewState = diagnosticDebounceState != lastSpokenDiagnostic
-                    val isPeriodicNag = (now - lastDiagnosticSpokenTimestamp >= 15000L) && (diagnosticDebounceState != "VERIFIED")
-
-                    if (isNewState || isPeriodicNag) {
-                        when (diagnosticDebounceState) {
-                            "VERIFIED" -> {
-                                if (lastSpokenDiagnostic.isNotEmpty()) {
-                                    speak("Station locked. User and QR verified.")
+                        if ((now - diagnosticDebounceStartTime) >= 1500L) {
+                            val isNew = diagnosticDebounceState != lastSpokenDiagnostic
+                            val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L) && (diagnosticDebounceState != "VERIFIED")
+                            if (isNew || isNag) {
+                                when (diagnosticDebounceState) {
+                                    "USER_OK_QR_MISSING" -> speak("User verified, sir. Wall anchor occluded.")
+                                    "STAND_READY_USER_MISSING" -> speak("Stand aligned, sir. Please take your seat.")
+                                    "SETUP_INCOMPLETE" -> speak("Please position the device on stand, sir.")
+                                }
+                                lastSpokenDiagnostic = diagnosticDebounceState
+                                lastDiagnosticSpokenTimestamp = now
+                            }
+                        }
+                    } else if (activeSlot != -1) {
+                        if (isPersonCurrentlyPresent && !isAnchorValid && isAnchorRequired) {
+                            if (diagnosticDebounceState != "USER_OK_QR_MISSING") {
+                                diagnosticDebounceState = "USER_OK_QR_MISSING"
+                                diagnosticDebounceStartTime = now
+                            }
+                            if ((now - diagnosticDebounceStartTime) >= 2000L) {
+                                val isNew = lastSpokenDiagnostic != "USER_OK_QR_MISSING"
+                                val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L)
+                                if (isNew || isNag) {
+                                    speak("User verified, sir. Wall anchor occluded.")
+                                    lastSpokenDiagnostic = "USER_OK_QR_MISSING"
+                                    lastDiagnosticSpokenTimestamp = now
                                 }
                             }
-                            "USER_OK_QR_MISSING" -> speak("User OK. QR anchor missing.")
-                            "USER_MISSING_QR_OK" -> speak("QR OK. User missing.")
-                            "BOTH_MISSING" -> speak("User and QR missing.")
+                        } else if (isFullyVerifiedAtDesk) {
+                            diagnosticDebounceState = "VERIFIED"
+                            lastSpokenDiagnostic = "VERIFIED"
                         }
-                        lastSpokenDiagnostic = diagnosticDebounceState
-                        lastDiagnosticSpokenTimestamp = now
+                    }
+                } else {
+                    diagnosticDebounceState = ""
+                    if (isUserOnLegitimateAbsence) {
+                        lastSpokenDiagnostic = ""
                     }
                 }
 
@@ -1237,32 +1293,29 @@ class MainActivity : AppCompatActivity() {
 
                             if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                                 slotLaunchAnnounced[activeSlot] = true
-                                mainHandler.postDelayed({ speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!") }, 400)
+                                speak("Station secured, sir. Study Slot $activeSlot commencing. Focus engaged.")
                             } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
                                 preSlotReadyAnnounced[preSlotNum] = true
                                 val bat = getBatteryPercentage()
-                                val batStr = if (bat > 0) "Battery $bat percent." else "Battery ready."
-                                mainHandler.postDelayed({ speak("Camera ready. $batStr") }, 400)
+                                val batStr = if (bat > 0) "Battery at $bat percent." else "Power levels stable."
+                                speak("Station secured, sir. Optical systems ready. $batStr")
                             } else if (currentAbsenceState == AbsenceState.BUFFER) {
                                 val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                                 val used = getBufferUsedCount(activeSlot)
                                 val left = (maxBuffers - used).coerceAtLeast(0)
-                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
-                                val bNum = currentBufferTripNum
-                                mainHandler.postDelayed({ speak("Buffer $bNum complete. $leftStr.") }, 400)
+                                val leftStr = if (left == 1) "1 buffer remaining" else "$left buffers remaining"
+                                speak("Station secured, sir. Buffer concluded. $leftStr.")
                                 currentAbsenceState = AbsenceState.NONE
                             } else if (currentAbsenceState == AbsenceState.BREAK) {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                mainHandler.postDelayed({ speak("Break paused. $mins minutes left.") }, 400)
+                                speak("Station secured, sir. Break paused. $mins minutes remaining in bank.")
                                 currentAbsenceState = AbsenceState.NONE
                             }
                         }
                     } else {
                         wasStationAlignedLastTick = false
                         if (deskLostTimestamp == 0L) deskLostTimestamp = System.currentTimeMillis()
-
-                        val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
 
                         if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
                             val usedBufferCount = getBufferUsedCount(activeSlot)
@@ -1272,14 +1325,13 @@ class MainActivity : AppCompatActivity() {
                                 incrementBufferUsedCount(activeSlot)
                                 currentBufferTripNum = usedBufferCount + 1
                                 val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
-                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
-                                val reasonCause = if (!isAnchorValid) "QR missing" else "User away"
-                                speak("Buffer $currentBufferTripNum on. $reasonCause. $leftStr.")
+                                val leftStr = if (left == 1) "1 buffer remaining" else "$left buffers remaining"
+                                speak("Buffer $currentBufferTripNum initiated, sir. $leftStr.")
                                 currentAbsenceState = AbsenceState.BUFFER
                             } else {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Break on. $mins minutes left.") else speak("Break ending. Under one minute left.")
+                                if (mins >= 1) speak("Break protocol active, sir. $mins minutes remaining.") else speak("Break bank critical, sir. Under one minute remaining.")
                                 currentAbsenceState = AbsenceState.BREAK
                             }
                             hasAnnouncedExitForCurrentAbsence = true
@@ -1291,8 +1343,8 @@ class MainActivity : AppCompatActivity() {
                                 currentAbsenceState = AbsenceState.BREAK
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Buffer $currentBufferTripNum expired. Break on. $mins minutes left.")
-                                else speak("Buffer $currentBufferTripNum expired. Break ending. Under one minute left.")
+                                if (mins >= 1) speak("Buffer expired, sir. Transitioning to break bank. $mins minutes remaining.")
+                                else speak("Buffer expired, sir. Break bank critical. Under one minute remaining.")
                             }
                         }
 
@@ -1351,8 +1403,6 @@ class MainActivity : AppCompatActivity() {
                             tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
                             stopAlarmAndFinishAbsence()
                         } else {
-                            val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
-
                             if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
                                 val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
                                 tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s) [$personTag]"
@@ -1419,7 +1469,7 @@ class MainActivity : AppCompatActivity() {
                     val bat = getBatteryPercentage()
                     if (bat in 1..20 && !hasAnnouncedLowBattery) {
                         hasAnnouncedLowBattery = true
-                        speak("Alert: Battery low at $bat percent. Please connect charger.")
+                        speak("Pardon the intrusion, sir. Battery low at $bat percent. Charger connection recommended.")
                     } else if (bat > 25) {
                         hasAnnouncedLowBattery = false
                     }
