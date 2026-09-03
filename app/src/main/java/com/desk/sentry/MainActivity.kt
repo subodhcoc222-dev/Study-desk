@@ -75,9 +75,14 @@ class MainActivity : AppCompatActivity() {
 
     // Rock-Solid Presence Tracking
     private var presenceConfidenceScore = 0
-    private val ANCHOR_OCCLUSION_TOLERANCE_MS = 15000L
 
-    // Sustained Presence Timer (Must be present for 1.2s to prevent chair flickers)
+    // Calibrated QR Occlusion & Grace Window
+    private val QR_WARNING_DELAY_MS = 8000L
+    private val QR_MAX_OCCLUSION_MS = 14000L
+    private var hasAnnouncedQrWarningForCurrentOcclusion = false
+    private var wasQrWarningActivePreviously = false
+
+    // Sustained Presence Timer
     private var sustainedPresenceStartMs = 0L
 
     // Alignment Diagnostic State Machine
@@ -268,10 +273,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * CRISP NATURAL VOICE:
-     * British male configuration with standard pitch and rate.
-     */
     private fun initCleanTTS() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -436,8 +437,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        // Strict Security: Long press bypass completely removed!
-
         switchMasterSentry.setOnClickListener {
             val target = switchMasterSentry.isChecked
             switchMasterSentry.isChecked = !target
@@ -1032,15 +1031,13 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * ADVANCED ANTI-CHAIR HUMAN ANATOMY FILTER:
-     * High confidence thresholds & strict anatomical vertical layering (Eyes above Nose, Nose above Mouth, Shoulders broad).
+     * High confidence thresholds & strict anatomical vertical layering (Eyes above Nose, Nose above Shoulder).
      * An office chair headrest/frame CANNOT fake this biological arrangement.
      */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
         val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
         val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
-        val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
-        val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
 
@@ -1061,7 +1058,6 @@ class MainActivity : AppCompatActivity() {
 
             // Strict Vertical Order: Eye must be HIGHER than nose, and Nose must be HIGHER than shoulder!
             if (eyeY < noseY && noseY < shoulderY) {
-                // If both shoulders exist, verify broad human width (chairs are too narrow)
                 if (leftShoulder != null && rightShoulder != null &&
                     leftShoulder.inFrameLikelihood >= 0.40f && rightShoulder.inFrameLikelihood >= 0.40f) {
                     val span = abs(leftShoulder.position.x - rightShoulder.position.x)
@@ -1117,7 +1113,6 @@ class MainActivity : AppCompatActivity() {
                 if (frameValid) {
                     presenceConfidenceScore = (presenceConfidenceScore + 1).coerceAtMost(5)
                 } else {
-                    // Instant wipe: Empty chair drops to 0 immediately!
                     presenceConfidenceScore = 0
                 }
                 isPersonCurrentlyPresent = presenceConfidenceScore >= 3
@@ -1128,12 +1123,10 @@ class MainActivity : AppCompatActivity() {
                 if (barcodes.isNotEmpty()) {
                     lastAnchorSeenTimestamp = System.currentTimeMillis()
                     isAnchorCurrentlyPresent = true
-                } else {
-                    isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
+                    hasAnnouncedQrWarningForCurrentOcclusion = false
                 }
             }
 
-        // Robust Collection overload to prevent ambiguity
         Tasks.whenAllComplete(listOf<Task<*>>(poseTask, barcodeTask))
             .addOnCompleteListener {
                 try {
@@ -1211,11 +1204,49 @@ class MainActivity : AppCompatActivity() {
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
-                val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
-                val rawVerified = isPersonCurrentlyPresent && isAnchorValid
                 val now = System.currentTimeMillis()
+                val qrMissingDuration = now - lastAnchorSeenTimestamp
 
-                // SUSTAINED PRESENCE FILTER (Must be continuously present for 1200ms to count as seated)
+                // =========================================================================
+                // INTELLIGENT 2-STAGE QR OCCLUSION LOGIC:
+                // 0-8s: Silent grace.
+                // 8-14s: Voice warning given; 5-6s adjustment grace granted (NO BUFFER YET).
+                // >14s: Buffer starts only if user ignored warning.
+                // =========================================================================
+                val isAnchorValid: Boolean
+                var isAdjustWarningActive = false
+
+                if (isPersonCurrentlyPresent) {
+                    if (qrMissingDuration < QR_WARNING_DELAY_MS) {
+                        isAnchorValid = true
+                    } else if (qrMissingDuration < QR_MAX_OCCLUSION_MS) {
+                        isAnchorValid = true
+                        isAdjustWarningActive = true
+
+                        if (!hasAnnouncedQrWarningForCurrentOcclusion && isSentryArmed && activeSlot != -1) {
+                            speak("QR code missing. Please adjust.")
+                            hasAnnouncedQrWarningForCurrentOcclusion = true
+                            wasQrWarningActivePreviously = true
+                        }
+                    } else {
+                        isAnchorValid = false
+                    }
+                } else {
+                    hasAnnouncedQrWarningForCurrentOcclusion = false
+                    isAnchorValid = qrMissingDuration < 5000L
+                }
+
+                // =========================================================================
+                // IMMEDIATE "QR DETECTED" CONFIRMATION UPON SUCCESSFUL ADJUSTMENT
+                // =========================================================================
+                if (wasQrWarningActivePreviously && !isAdjustWarningActive && isAnchorValid && isPersonCurrentlyPresent) {
+                    speak("QR detected.")
+                    try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 250) } catch (e: Exception) { e.printStackTrace() }
+                    wasQrWarningActivePreviously = false
+                }
+
+                val rawVerified = isPersonCurrentlyPresent && isAnchorValid
+
                 if (rawVerified) {
                     if (sustainedPresenceStartMs == 0L) sustainedPresenceStartMs = now
                 } else {
@@ -1225,67 +1256,41 @@ class MainActivity : AppCompatActivity() {
                 val isFullyVerifiedAtDesk = rawVerified && (sustainedPresenceStartMs > 0L && (now - sustainedPresenceStartMs >= 1200L))
                 val awaySinceMs = if (deskLostTimestamp > 0L) now - deskLostTimestamp else 0L
 
-                // Diagnostic voice: strictly muted during breaks & buffers
-                val isUserOnLegitimateAbsence = (currentAbsenceState != AbsenceState.NONE) ||
-                        hasAnnouncedExitForCurrentAbsence ||
-                        (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS)
+                // Pre-slot stand positioning diagnostics
+                if (isSentryArmed && (isPreSlotActive || isArmingGraceActive)) {
+                    val currentDiag = when {
+                        isFullyVerifiedAtDesk -> "VERIFIED"
+                        isPersonCurrentlyPresent && !isAnchorValid -> "USER_OK_QR_MISSING"
+                        !isPersonCurrentlyPresent && isAnchorValid -> "STAND_READY_USER_MISSING"
+                        else -> "SETUP_INCOMPLETE"
+                    }
 
-                if (isSentryArmed && !isUserOnLegitimateAbsence) {
-                    if (isPreSlotActive || isArmingGraceActive) {
-                        val currentDiag = when {
-                            isFullyVerifiedAtDesk -> "VERIFIED"
-                            isPersonCurrentlyPresent && !isAnchorValid -> "USER_OK_QR_MISSING"
-                            !isPersonCurrentlyPresent && isAnchorValid -> "STAND_READY_USER_MISSING"
-                            else -> "SETUP_INCOMPLETE"
-                        }
+                    if (currentDiag != diagnosticDebounceState) {
+                        diagnosticDebounceState = currentDiag
+                        diagnosticDebounceStartTime = now
+                    }
 
-                        if (currentDiag != diagnosticDebounceState) {
-                            diagnosticDebounceState = currentDiag
-                            diagnosticDebounceStartTime = now
-                        }
-
-                        if ((now - diagnosticDebounceStartTime) >= 1500L) {
-                            val isNew = diagnosticDebounceState != lastSpokenDiagnostic
-                            val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L) && (diagnosticDebounceState != "VERIFIED")
-                            if (isNew || isNag) {
-                                when (diagnosticDebounceState) {
-                                    "USER_OK_QR_MISSING" -> speak("QR code missing. Please adjust.")
-                                    "STAND_READY_USER_MISSING" -> speak("Stand ready. Take your seat.")
-                                    "SETUP_INCOMPLETE" -> speak("Place phone on stand.")
-                                }
-                                lastSpokenDiagnostic = diagnosticDebounceState
-                                lastDiagnosticSpokenTimestamp = now
+                    if ((now - diagnosticDebounceStartTime) >= 1500L) {
+                        val isNew = diagnosticDebounceState != lastSpokenDiagnostic
+                        val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L) && (diagnosticDebounceState != "VERIFIED")
+                        if (isNew || isNag) {
+                            when (diagnosticDebounceState) {
+                                "USER_OK_QR_MISSING" -> speak("QR code missing. Please adjust.")
+                                "STAND_READY_USER_MISSING" -> speak("Stand ready. Take your seat.")
+                                "SETUP_INCOMPLETE" -> speak("Place phone on stand.")
                             }
-                        }
-                    } else if (activeSlot != -1) {
-                        if (isPersonCurrentlyPresent && !isAnchorValid) {
-                            if (diagnosticDebounceState != "USER_OK_QR_MISSING") {
-                                diagnosticDebounceState = "USER_OK_QR_MISSING"
-                                diagnosticDebounceStartTime = now
-                            }
-                            if ((now - diagnosticDebounceStartTime) >= 2000L) {
-                                val isNew = lastSpokenDiagnostic != "USER_OK_QR_MISSING"
-                                val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L)
-                                if (isNew || isNag) {
-                                    speak("QR code missing. Please adjust.")
-                                    lastSpokenDiagnostic = "USER_OK_QR_MISSING"
-                                    lastDiagnosticSpokenTimestamp = now
-                                }
-                            }
-                        } else if (isFullyVerifiedAtDesk) {
-                            diagnosticDebounceState = "VERIFIED"
-                            lastSpokenDiagnostic = "VERIFIED"
+                            lastSpokenDiagnostic = diagnosticDebounceState
+                            lastDiagnosticSpokenTimestamp = now
                         }
                     }
                 } else {
                     diagnosticDebounceState = ""
-                    if (isUserOnLegitimateAbsence) lastSpokenDiagnostic = ""
                 }
 
                 val personTag = if (isPersonCurrentlyPresent) "👤 User: ✓" else "👤 User: ✗"
-                val anchorTag = if (isAnchorValid) "🏷️ QR: ✓" else "🏷️ QR: ✗"
+                val anchorTag = if (isAnchorValid && !isAdjustWarningActive) "🏷️ QR: ✓" else "🏷️ QR: ✗"
 
-                if (isFullyVerifiedAtDesk) {
+                if (isFullyVerifiedAtDesk && !isAdjustWarningActive) {
                     lastSeenTimestamp = System.currentTimeMillis()
                     if (isArmingGraceActive) isArmingGraceActive = false
                 }
@@ -1303,7 +1308,7 @@ class MainActivity : AppCompatActivity() {
                     tvCountdown.text = "Place phone on stand. [$personTag | $anchorTag]"
                     stopAlarmAndFinishAbsence()
                 } else {
-                    if (isFullyVerifiedAtDesk) {
+                    if (isFullyVerifiedAtDesk && !isAdjustWarningActive) {
                         deskLostTimestamp = 0L
                         hasAnnouncedExitForCurrentAbsence = false
                         isAudioRadarActive = false
@@ -1332,6 +1337,13 @@ class MainActivity : AppCompatActivity() {
                                 currentAbsenceState = AbsenceState.NONE
                             }
                         }
+                    } else if (isPersonCurrentlyPresent && isAdjustWarningActive) {
+                        wasStationAlignedLastTick = false
+                        val remainingAdjustSec = ((QR_MAX_OCCLUSION_MS - qrMissingDuration) / 1000L).coerceAtLeast(0L) + 1
+                        tvLiveStatus.text = "⚠️ ADJUST QR CODE (${remainingAdjustSec}s)"
+                        tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
+                        tvCountdown.text = "User verified ✓ • Please lean or adjust chair to unblock QR"
+                        stopAlarmAndFinishAbsence()
                     } else {
                         wasStationAlignedLastTick = false
                         if (deskLostTimestamp == 0L) deskLostTimestamp = System.currentTimeMillis()
@@ -1413,7 +1425,7 @@ class MainActivity : AppCompatActivity() {
                         val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                         val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
-                        if (isFullyVerifiedAtDesk) {
+                        if (isFullyVerifiedAtDesk && !isAdjustWarningActive) {
                             tvLiveStatus.text = "● STATION LOCKED [$personTag | $anchorTag]"
                             tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
                             val m = remainingBankSec / 60
@@ -1421,7 +1433,7 @@ class MainActivity : AppCompatActivity() {
                             val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
                             tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
                             stopAlarmAndFinishAbsence()
-                        } else {
+                        } else if (!isAdjustWarningActive) {
                             if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
                                 val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
                                 tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s) [$personTag]"
@@ -1481,8 +1493,10 @@ class MainActivity : AppCompatActivity() {
 
                 if (isSentryArmed && !isArmingGraceActive && currentActiveSlot != -1) {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
-                    val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
-                    val rawVerified = isPersonCurrentlyPresent && isAnchorValid
+                    val qrMissingDuration = System.currentTimeMillis() - lastAnchorSeenTimestamp
+
+                    val isAnchorCreditValid = qrMissingDuration < QR_MAX_OCCLUSION_MS
+                    val rawVerified = isPersonCurrentlyPresent && isAnchorCreditValid
                     val isFullyVerifiedAtDesk = rawVerified && (sustainedPresenceStartMs > 0L && (System.currentTimeMillis() - sustainedPresenceStartMs >= 1200L))
 
                     val bat = getBatteryPercentage()
