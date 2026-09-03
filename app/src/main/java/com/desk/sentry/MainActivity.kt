@@ -26,6 +26,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Size
 import android.view.Gravity
 import android.view.View
@@ -264,32 +265,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * JARVIS BRITISH AI VOICE TUNING:
-     * British male accent, calibrated low pitch for deep presence, dignified pacing.
+     * AUTHENTIC JARVIS BRITISH MALE ENGINE:
+     * Enforces Google UK Male models (rjs, gbb, gbd) and eliminates female fallback.
      */
     private fun initJarvisTTS() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val ukLocale = Locale.UK
-                val result = tts?.setLanguage(ukLocale)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    tts?.setLanguage(Locale.ENGLISH)
-                }
+                tts?.setLanguage(ukLocale)
 
-                // Jarvis Persona: 0.92f Pitch (Deep resonance), 0.88f Speed (Articulate British cadence)
-                tts?.setPitch(0.92f)
-                tts?.setSpeechRate(0.88f)
+                // Commanding, alert J.A.R.V.I.S. cadence
+                tts?.setPitch(0.95f)
+                tts?.setSpeechRate(1.05f)
 
-                // Select British Male voice if present in system voices
                 try {
                     val voices = tts?.voices
-                    val jarvisVoice = voices?.firstOrNull { v ->
-                        v.locale.language == Locale.UK.language &&
-                        (v.name.contains("male", ignoreCase = true) || v.name.contains("en-gb", ignoreCase = true)) &&
-                        !v.isNetworkConnectionRequired
-                    } ?: voices?.firstOrNull { it.locale.language == Locale.UK.language }
-                    if (jarvisVoice != null) {
-                        tts?.voice = jarvisVoice
+                    val jarvisMaleVoice = voices?.firstOrNull { v ->
+                        val isUk = v.locale.language == "en" &&
+                                (v.locale.country.equals("GB", ignoreCase = true) || v.name.contains("en-gb", ignoreCase = true))
+                        val isExplicitMale = v.name.contains("male", ignoreCase = true) ||
+                                v.name.contains("rjs", ignoreCase = true) || // Google UK Male #1
+                                v.name.contains("gbb", ignoreCase = true) || // Google UK Male #2
+                                v.name.contains("gbd", ignoreCase = true)   // Google UK Male #3
+                        val isNotFemale = !v.name.contains("female", ignoreCase = true) &&
+                                !v.name.contains("gba", ignoreCase = true) &&
+                                !v.name.contains("gbc", ignoreCase = true)
+
+                        isUk && isExplicitMale && isNotFemale && !v.isNetworkConnectionRequired
+                    } ?: tts?.defaultVoice
+
+                    if (jarvisMaleVoice != null) {
+                        tts?.voice = jarvisMaleVoice
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -298,7 +304,7 @@ class MainActivity : AppCompatActivity() {
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(1) // Dual-hardware routing flag
+                    .setFlags(1)
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -313,8 +319,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * PROFESSIONAL AUDIO QUEUE:
-     * Never truncates sentences. Uses QUEUE_ADD for unbroken, dignified speech.
+     * UNBROKEN FIFO AUDIO QUEUE:
+     * Uses QUEUE_ADD so sentences never clip or truncate each other.
      */
     private fun speak(text: String, flush: Boolean = false) {
         if (!isTtsReady || tts == null) return
@@ -1011,7 +1017,7 @@ class MainActivity : AppCompatActivity() {
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-                // FULL 1080P HD (1920x1080) FOR RAZOR SHARP DISTANT QR READING
+                // FULL 1080P HD (1920x1080) FOR MAXIMUM DISTANT QR SHARPNESS
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
