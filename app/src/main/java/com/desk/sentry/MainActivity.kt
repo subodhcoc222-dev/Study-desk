@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
     private var lastAdjustmentBeepMs = 0L
 
     // -------------------------------------------------------------
-    // ADVANCED AI SPEECH & 8-SECOND FALSE EXIT DEBOUNCE STATES
+    // ADVANCED AI SPEECH, DEBOUNCE & ADAPTIVE RADAR STATES
     // -------------------------------------------------------------
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
@@ -1148,6 +1148,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * DYNAMIC 3-STAGE PROXIMITY RADAR BEEP CALCULATOR
+     * Adapts automatically to any buffer length or break bank.
+     */
+    private fun getAdaptiveBeepIntervalMs(isBreak: Boolean, remainingSec: Long, totalSec: Long): Long {
+        return if (isBreak) {
+            when {
+                remainingSec > 120L -> 2000L  // Green Zone (> 2 mins left): Calm 2.0s
+                remainingSec in 31L..120L -> 1000L // Yellow Zone (2m to 30s left): Alert 1.0s
+                else -> 400L                  // Red Zone (Last 30s): Rapid 0.4s pulse
+            }
+        } else {
+            when {
+                totalSec <= 15L -> { // 10s testing buffer
+                    when {
+                        remainingSec > 4L -> 1500L
+                        remainingSec in 2L..4L -> 800L
+                        else -> 350L
+                    }
+                }
+                totalSec <= 65L -> { // 1 min buffer
+                    when {
+                        remainingSec > 25L -> 2000L
+                        remainingSec in 10L..25L -> 1000L
+                        else -> 400L
+                    }
+                }
+                else -> { // 2m or 3m Gold Standard buffer
+                    when {
+                        remainingSec > 60L -> 2000L  // Green Zone (3:00 to 1:00): Calm 2.0s
+                        remainingSec in 20L..60L -> 1000L // Yellow Zone (1:00 to 0:20): Alert 1.0s
+                        else -> 400L                 // Red Zone (Last 20s): Rapid 0.4s pulse
+                    }
+                }
+            }
+        }
+    }
+
     private fun startMonitoringLoop() {
         mainHandler.post(object : Runnable {
             override fun run() {
@@ -1186,7 +1224,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         wasStationAlignedLastTick = true
 
-                        // ENTRY ANNOUNCEMENT FLOW (with 400ms buffer so chime finishes)
+                        // ENTRY ANNOUNCEMENT FLOW
                         if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                             slotLaunchAnnounced[activeSlot] = true
                             mainHandler.postDelayed({
@@ -1226,13 +1264,12 @@ class MainActivity : AppCompatActivity() {
 
                     val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
 
-                    // 8-SECOND FALSE-EXIT DEBOUNCE (Fallen Pen / Stretching / Quick Shift Protection)
+                    // 8-SECOND FALSE-EXIT DEBOUNCE
                     if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
                         val usedBufferCount = getBufferUsedCount(activeSlot)
                         val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
 
                         if (usedBufferCount < maxBuffers) {
-                            // Quick Buffer Trip
                             incrementBufferUsedCount(activeSlot)
                             currentBufferTripNum = usedBufferCount + 1
                             val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
@@ -1240,7 +1277,6 @@ class MainActivity : AppCompatActivity() {
                             speak("Buffer $currentBufferTripNum on. $leftStr.")
                             currentAbsenceState = AbsenceState.BUFFER
                         } else {
-                            // Official Break Bank Trip
                             val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                             val mins = (remainingSec / 60).toInt()
                             if (mins >= 1) {
@@ -1253,16 +1289,35 @@ class MainActivity : AppCompatActivity() {
                         hasAnnouncedExitForCurrentAbsence = true
                     }
 
-                    // AUDIO BEACON SEARCHING BEEP
-                    // Pre-Slot: Active immediately for phone setup
-                    // Active Slot: Active ONLY after 8s debounce confirms actual departure
+                    // ========================================================
+                    // 3-STAGE DYNAMIC AUDIO RADAR BEACON BEEP
+                    // ========================================================
                     val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
 
                     if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
                         val now = System.currentTimeMillis()
-                        if (now - lastAdjustmentBeepMs > 1800L) {
+
+                        val dynamicIntervalMs: Long = if (isPreSlotActive) {
+                            2000L // Calm, unhurried pace during pre-slot camera setup
+                        } else if (activeSlot != -1) {
+                            if (currentAbsenceState == AbsenceState.BUFFER) {
+                                val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                                val remainingBufferSec = ((absenceThresholdMs - awayDurationMs) / 1000L).coerceAtLeast(0L)
+                                val totalBufferSec = absenceThresholdMs / 1000L
+                                getAdaptiveBeepIntervalMs(false, remainingBufferSec, totalBufferSec)
+                            } else if (currentAbsenceState == AbsenceState.BREAK) {
+                                val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                                getAdaptiveBeepIntervalMs(true, remainingSec, 1800L)
+                            } else {
+                                2000L
+                            }
+                        } else {
+                            2000L
+                        }
+
+                        if (now - lastAdjustmentBeepMs > dynamicIntervalMs) {
                             try {
-                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 100)
+                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 80)
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
@@ -1303,7 +1358,6 @@ class MainActivity : AppCompatActivity() {
                         val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
 
                         if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
-                            // User briefly bent down (pen dropped) - Grace observation
                             val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
                             tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s)"
                             tvLiveStatus.setTextColor(Color.parseColor("#FBBF24"))
@@ -1316,7 +1370,7 @@ class MainActivity : AppCompatActivity() {
                                 val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
                                 tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount, maxBuffers)
                                 tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                                tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Beacon Active)"
+                                tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Radar Beacon Active)"
                                 stopAlarmAndFinishAbsence()
                             } else {
                                 if (remainingBankSec > 0) {
@@ -1326,7 +1380,7 @@ class MainActivity : AppCompatActivity() {
                                     val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
                                     tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
                                     tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                    tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
+                                    tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Radar Active)", m, s)
                                     stopAlarmAndFinishAbsence()
                                 } else {
                                     tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
@@ -1380,7 +1434,6 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
 
-                        // If within 8s debounce, protect break bank from premature deductions
                         if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS) {
                             val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
                             val isInBufferTime = hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs
