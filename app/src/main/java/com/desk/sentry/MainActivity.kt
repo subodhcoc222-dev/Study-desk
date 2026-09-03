@@ -58,7 +58,7 @@ import kotlin.math.abs
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
-    private var isSentryArmed = true
+    private var isSentryArmed = false
     private var isAlwaysActiveMode = false
     private var absenceThresholdMs = 180000L // Default 3 mins buffer (Gold Standard)
     private var lastSeenTimestamp = System.currentTimeMillis()
@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
     private var lastAdjustmentBeepMs = 0L
 
     // -------------------------------------------------------------
-    // ADVANCED AI SPEECH, DEBOUNCE & ADAPTIVE RADAR STATES
+    // ADVANCED AI SPEECH, DEBOUNCE, GRACE & ADAPTIVE RADAR STATES
     // -------------------------------------------------------------
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
@@ -104,8 +104,12 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    // 8-Second Debounce Threshold for Fallen Pens / Short Movements
+    // 8-Second False-Exit Debounce Threshold for Fallen Pens / Movement
     private val FALSE_EXIT_DEBOUNCE_MS = 8000L
+
+    // 45-Second Placement Grace Window upon Arming
+    private var isArmingGraceActive = false
+    private var armingGraceRemainingSec = 0
 
     private val slotLaunchAnnounced = BooleanArray(6) { false }
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
@@ -120,7 +124,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnEnterStealth: Button
     private lateinit var switchMasterSentry: SwitchMaterial
     private lateinit var switchAlwaysActive: SwitchMaterial
-    private lateinit var switchBgGuard: SwitchMaterial
     private lateinit var rgGracePeriod: RadioGroup
     private lateinit var tvBufferLimitTitle: TextView
     private lateinit var tvBufferRemainingLive: TextView
@@ -175,6 +178,9 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
+        // Default: Sentry is UNARMED on fresh install to prevent false locks
+        isSentryArmed = prefs.getBoolean("sentry_armed", false)
+
         try {
             toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 85)
         } catch (e: Exception) {
@@ -183,7 +189,8 @@ class MainActivity : AppCompatActivity() {
 
         initTTS()
         checkAllPermissions()
-        if (prefs.getBoolean("bg_guard_enabled", true)) {
+
+        if (isSentryArmed) {
             startPersistentBackgroundService()
         }
 
@@ -348,7 +355,10 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Strict No-Negotiation: Back Button does nothing
+        // Strict No-Negotiation: Back Button does nothing while Armed
+        if (!isSentryArmed) {
+            super.onBackPressed()
+        }
     }
 
     private fun initViews() {
@@ -360,7 +370,6 @@ class MainActivity : AppCompatActivity() {
         btnEnterStealth = findViewById(R.id.btnEnterStealth)
         switchMasterSentry = findViewById(R.id.switchMasterSentry)
         switchAlwaysActive = findViewById(R.id.switchAlwaysActive)
-        switchBgGuard = findViewById(R.id.switchBgGuard)
         rgGracePeriod = findViewById(R.id.rgGracePeriod)
         tvBufferLimitTitle = findViewById(R.id.tvBufferLimitTitle)
         tvBufferRemainingLive = findViewById(R.id.tvBufferRemainingLive)
@@ -374,6 +383,9 @@ class MainActivity : AppCompatActivity() {
         dashboardLayout = findViewById(R.id.dashboardLayout)
         tvBreakBankHeader = findViewById(R.id.tvBreakBankHeader)
 
+        switchMasterSentry.isChecked = isSentryArmed
+        switchAlwaysActive.isChecked = prefs.getBoolean("always_active_mode", false)
+
         slotViews.clear()
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot1), findViewById(R.id.tvSlot1), findViewById(R.id.btnSetSlot1), 1))
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot2), findViewById(R.id.tvSlot2), findViewById(R.id.btnSetSlot2), 2))
@@ -381,19 +393,36 @@ class MainActivity : AppCompatActivity() {
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot4), findViewById(R.id.tvSlot4), findViewById(R.id.btnSetSlot4), 4))
         slotViews.add(SlotViewHolder(findViewById(R.id.cbSlot5), findViewById(R.id.tvSlot5), findViewById(R.id.btnSetSlot5), 5))
 
-        switchBgGuard.isChecked = prefs.getBoolean("bg_guard_enabled", true)
         updateAdminStatusUI()
     }
 
     private fun setupListeners() {
+        // UNIFIED ALL-IN-ONE MASTER SWITCH
         switchMasterSentry.setOnClickListener {
             val targetState = switchMasterSentry.isChecked
             switchMasterSentry.isChecked = !targetState
-            requirePinVerification("Modify Master Sentry State") {
-                switchMasterSentry.isChecked = targetState
-                isSentryArmed = targetState
-                prefs.edit().putBoolean("sentry_armed", targetState).apply()
-                if (!targetState) stopAlarmAndFinishAbsence()
+
+            if (targetState) {
+                // ARMING: Start Guard + 45s Setup Grace Window
+                switchMasterSentry.isChecked = true
+                isSentryArmed = true
+                prefs.edit().putBoolean("sentry_armed", true).apply()
+                startPersistentBackgroundService()
+
+                isArmingGraceActive = true
+                armingGraceRemainingSec = 45
+                Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
+            } else {
+                // DISARMING: PIN Required to release entire lockdown
+                requirePinVerification("Disarm Master Sentry & Unlock Device") {
+                    switchMasterSentry.isChecked = false
+                    isSentryArmed = false
+                    prefs.edit().putBoolean("sentry_armed", false).apply()
+                    stopPersistentBackgroundService()
+                    stopAlarmAndFinishAbsence()
+                    isArmingGraceActive = false
+                    Toast.makeText(this, "Sentry Disarmed. System Unlocked.", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -405,23 +434,6 @@ class MainActivity : AppCompatActivity() {
                 isAlwaysActiveMode = targetState
                 prefs.edit().putBoolean("always_active_mode", targetState).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
-            }
-        }
-
-        switchBgGuard.setOnClickListener {
-            val targetState = switchBgGuard.isChecked
-            switchBgGuard.isChecked = !targetState
-            val actionText = if (targetState) "Enable 24/7 Background Guard" else "Disable 24/7 Background Guard"
-            requirePinVerification(actionText) {
-                switchBgGuard.isChecked = targetState
-                prefs.edit().putBoolean("bg_guard_enabled", targetState).apply()
-                if (targetState) {
-                    startPersistentBackgroundService()
-                    Toast.makeText(this, "24/7 Guard Activated!", Toast.LENGTH_SHORT).show()
-                } else {
-                    stopPersistentBackgroundService()
-                    Toast.makeText(this, "24/7 Guard Stopped!", Toast.LENGTH_SHORT).show()
-                }
             }
         }
 
@@ -963,13 +975,9 @@ class MainActivity : AppCompatActivity() {
         return -1
     }
 
-    /**
-     * 10-MINUTE PRE-SLOT SETUP WINDOW
-     * Returns Pair(isPreSlotActive, slotNumber)
-     */
     private fun getPreSlotWindowInfo(): Pair<Boolean, Int> {
-        val isSentryArmed = prefs.getBoolean("sentry_armed", true)
-        if (!isSentryArmed || isAlwaysActiveMode) return Pair(false, 0)
+        val isArmed = prefs.getBoolean("sentry_armed", false)
+        if (!isArmed || isAlwaysActiveMode) return Pair(false, 0)
 
         val now = Calendar.getInstance()
         val currentDayOfWeek = now.get(Calendar.DAY_OF_WEEK)
@@ -1036,9 +1044,6 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /**
-     * CALIBRATED SPECIFICALLY FOR USER'S DESK POSTURE (INCLUDING BOWED HEAD WRITING)
-     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val minConfidence = 0.35f
 
@@ -1148,38 +1153,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * DYNAMIC 3-STAGE PROXIMITY RADAR BEEP CALCULATOR
-     * Adapts automatically to any buffer length or break bank.
-     */
     private fun getAdaptiveBeepIntervalMs(isBreak: Boolean, remainingSec: Long, totalSec: Long): Long {
         return if (isBreak) {
             when {
-                remainingSec > 120L -> 2000L  // Green Zone (> 2 mins left): Calm 2.0s
-                remainingSec in 31L..120L -> 1000L // Yellow Zone (2m to 30s left): Alert 1.0s
-                else -> 400L                  // Red Zone (Last 30s): Rapid 0.4s pulse
+                remainingSec > 120L -> 2000L
+                remainingSec in 31L..120L -> 1000L
+                else -> 400L
             }
         } else {
             when {
-                totalSec <= 15L -> { // 10s testing buffer
+                totalSec <= 15L -> {
                     when {
                         remainingSec > 4L -> 1500L
                         remainingSec in 2L..4L -> 800L
                         else -> 350L
                     }
                 }
-                totalSec <= 65L -> { // 1 min buffer
+                totalSec <= 65L -> {
                     when {
                         remainingSec > 25L -> 2000L
                         remainingSec in 10L..25L -> 1000L
                         else -> 400L
                     }
                 }
-                else -> { // 2m or 3m Gold Standard buffer
+                else -> {
                     when {
-                        remainingSec > 60L -> 2000L  // Green Zone (3:00 to 1:00): Calm 2.0s
-                        remainingSec in 20L..60L -> 1000L // Yellow Zone (1:00 to 0:20): Alert 1.0s
-                        else -> 400L                 // Red Zone (Last 20s): Rapid 0.4s pulse
+                        remainingSec > 60L -> 2000L
+                        remainingSec in 20L..60L -> 1000L
+                        else -> 400L
                     }
                 }
             }
@@ -1192,8 +1193,7 @@ class MainActivity : AppCompatActivity() {
                 val activeSlot = getActiveStudySlot()
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
 
-                // Detect Slot Completion
-                if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode) {
+                if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode && isSentryArmed) {
                     speak("Study Slot $lastTrackedSlot completed. Great session. You can take your break now.")
                 }
                 lastTrackedSlot = activeSlot
@@ -1207,191 +1207,224 @@ class MainActivity : AppCompatActivity() {
 
                 if (isFullyVerifiedAtDesk) {
                     lastSeenTimestamp = System.currentTimeMillis()
+                    if (isArmingGraceActive) {
+                        isArmingGraceActive = false // Early completion if user already sat down
+                    }
                 }
 
                 // ========================================================
-                // 1. DUAL PRESENCE ENTRY & HARDWARE CHIME LOGIC
+                // 0. SAFE MODE / UNARMED / 45s ARMING GRACE WINDOW
                 // ========================================================
-                if (isFullyVerifiedAtDesk) {
-                    deskLostTimestamp = 0L
-                    hasAnnouncedExitForCurrentAbsence = false
-
-                    if (!wasStationAlignedLastTick) {
-                        try {
-                            toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                        wasStationAlignedLastTick = true
-
-                        // ENTRY ANNOUNCEMENT FLOW
-                        if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
-                            slotLaunchAnnounced[activeSlot] = true
-                            mainHandler.postDelayed({
-                                speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!")
-                            }, 400)
-                        } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
-                            preSlotReadyAnnounced[preSlotNum] = true
-                            val bat = getBatteryPercentage()
-                            val batStr = if (bat > 0) "Battery $bat percent." else "Battery ready."
-                            mainHandler.postDelayed({
-                                speak("Camera ready. $batStr")
-                            }, 400)
-                        } else if (currentAbsenceState == AbsenceState.BUFFER) {
-                            val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
-                            val used = getBufferUsedCount(activeSlot)
-                            val left = (maxBuffers - used).coerceAtLeast(0)
-                            val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
-                            val bNum = currentBufferTripNum
-                            mainHandler.postDelayed({
-                                speak("Buffer $bNum complete. $leftStr.")
-                            }, 400)
-                            currentAbsenceState = AbsenceState.NONE
-                        } else if (currentAbsenceState == AbsenceState.BREAK) {
-                            val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
-                            val mins = (remainingSec / 60).toInt()
-                            mainHandler.postDelayed({
-                                speak("Break paused. $mins minutes left.")
-                            }, 400)
-                            currentAbsenceState = AbsenceState.NONE
-                        }
-                    }
+                if (!isSentryArmed) {
+                    tvLiveStatus.text = "● SENTRY DISARMED (SAFE MODE)"
+                    tvLiveStatus.setTextColor(Color.GRAY)
+                    tvCountdown.text = "Normal Phone Mode • Turn on Master Sentry to Arm"
+                    stopAlarmAndFinishAbsence()
+                } else if (isArmingGraceActive) {
+                    tvLiveStatus.text = "⏱️ PLACEMENT GRACE ACTIVE (${armingGraceRemainingSec}s)"
+                    tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                    tvCountdown.text = "Place phone on stand and sit at desk. No alarms active."
+                    stopAlarmAndFinishAbsence()
                 } else {
-                    wasStationAlignedLastTick = false
-                    if (deskLostTimestamp == 0L) {
-                        deskLostTimestamp = System.currentTimeMillis()
-                    }
-
-                    val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
-
-                    // 8-SECOND FALSE-EXIT DEBOUNCE
-                    if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
-                        val usedBufferCount = getBufferUsedCount(activeSlot)
-                        val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
-
-                        if (usedBufferCount < maxBuffers) {
-                            incrementBufferUsedCount(activeSlot)
-                            currentBufferTripNum = usedBufferCount + 1
-                            val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
-                            val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
-                            speak("Buffer $currentBufferTripNum on. $leftStr.")
-                            currentAbsenceState = AbsenceState.BUFFER
-                        } else {
-                            val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
-                            val mins = (remainingSec / 60).toInt()
-                            if (mins >= 1) {
-                                speak("Break on. $mins minutes left.")
-                            } else {
-                                speak("Break ending. Under one minute left.")
-                            }
-                            currentAbsenceState = AbsenceState.BREAK
-                        }
-                        hasAnnouncedExitForCurrentAbsence = true
-                    }
-
                     // ========================================================
-                    // 3-STAGE DYNAMIC AUDIO RADAR BEACON BEEP
+                    // 1. DUAL PRESENCE ENTRY & HARDWARE CHIME LOGIC
                     // ========================================================
-                    val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
+                    if (isFullyVerifiedAtDesk) {
+                        deskLostTimestamp = 0L
+                        hasAnnouncedExitForCurrentAbsence = false
 
-                    if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
-                        val now = System.currentTimeMillis()
-
-                        val dynamicIntervalMs: Long = if (isPreSlotActive) {
-                            2000L // Calm, unhurried pace during pre-slot camera setup
-                        } else if (activeSlot != -1) {
-                            if (currentAbsenceState == AbsenceState.BUFFER) {
-                                val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
-                                val remainingBufferSec = ((absenceThresholdMs - awayDurationMs) / 1000L).coerceAtLeast(0L)
-                                val totalBufferSec = absenceThresholdMs / 1000L
-                                getAdaptiveBeepIntervalMs(false, remainingBufferSec, totalBufferSec)
-                            } else if (currentAbsenceState == AbsenceState.BREAK) {
-                                val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
-                                getAdaptiveBeepIntervalMs(true, remainingSec, 1800L)
-                            } else {
-                                2000L
-                            }
-                        } else {
-                            2000L
-                        }
-
-                        if (now - lastAdjustmentBeepMs > dynamicIntervalMs) {
+                        if (!wasStationAlignedLastTick) {
                             try {
-                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 80)
+                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
-                            lastAdjustmentBeepMs = now
+                            wasStationAlignedLastTick = true
+
+                            // ENTRY ANNOUNCEMENT FLOW
+                            if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
+                                slotLaunchAnnounced[activeSlot] = true
+                                mainHandler.postDelayed({
+                                    speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!")
+                                }, 400)
+                            } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
+                                preSlotReadyAnnounced[preSlotNum] = true
+                                val bat = getBatteryPercentage()
+                                val batStr = if (bat > 0) "Battery $bat percent." else "Battery ready."
+                                mainHandler.postDelayed({
+                                    speak("Camera ready. $batStr")
+                                }, 400)
+                            } else if (currentAbsenceState == AbsenceState.BUFFER) {
+                                val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+                                val used = getBufferUsedCount(activeSlot)
+                                val left = (maxBuffers - used).coerceAtLeast(0)
+                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                                val bNum = currentBufferTripNum
+                                mainHandler.postDelayed({
+                                    speak("Buffer $bNum complete. $leftStr.")
+                                }, 400)
+                                currentAbsenceState = AbsenceState.NONE
+                            } else if (currentAbsenceState == AbsenceState.BREAK) {
+                                val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                                val mins = (remainingSec / 60).toInt()
+                                mainHandler.postDelayed({
+                                    speak("Break paused. $mins minutes left.")
+                                }, 400)
+                                currentAbsenceState = AbsenceState.NONE
+                            }
+                        }
+                    } else {
+                        wasStationAlignedLastTick = false
+                        if (deskLostTimestamp == 0L) {
+                            deskLostTimestamp = System.currentTimeMillis()
+                        }
+
+                        val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
+
+                        // 8-SECOND FALSE-EXIT DEBOUNCE
+                        if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
+                            val usedBufferCount = getBufferUsedCount(activeSlot)
+                            val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+
+                            if (usedBufferCount < maxBuffers) {
+                                incrementBufferUsedCount(activeSlot)
+                                currentBufferTripNum = usedBufferCount + 1
+                                val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
+                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                                speak("Buffer $currentBufferTripNum on. $leftStr.")
+                                currentAbsenceState = AbsenceState.BUFFER
+                            } else {
+                                val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                                val mins = (remainingSec / 60).toInt()
+                                if (mins >= 1) {
+                                    speak("Break on. $mins minutes left.")
+                                } else {
+                                    speak("Break ending. Under one minute left.")
+                                }
+                                currentAbsenceState = AbsenceState.BREAK
+                            }
+                            hasAnnouncedExitForCurrentAbsence = true
+                        }
+
+                        // TRANSITION: BUFFER EXPIRED WHILE AWAY ➔ SEAMLESS SWITCH TO BREAK BANK
+                        if (hasAnnouncedExitForCurrentAbsence && currentAbsenceState == AbsenceState.BUFFER) {
+                            val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                            if (awayDurationMs > absenceThresholdMs) {
+                                currentAbsenceState = AbsenceState.BREAK
+                                val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                                val mins = (remainingSec / 60).toInt()
+                                if (mins >= 1) {
+                                    speak("Buffer $currentBufferTripNum expired. Break on. $mins minutes left.")
+                                } else {
+                                    speak("Buffer $currentBufferTripNum expired. Break ending. Under one minute left.")
+                                }
+                            }
+                        }
+
+                        // ========================================================
+                        // 3-STAGE DYNAMIC AUDIO RADAR BEACON BEEP
+                        // ========================================================
+                        val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
+
+                        if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
+                            val now = System.currentTimeMillis()
+
+                            val dynamicIntervalMs: Long = if (isPreSlotActive) {
+                                2000L
+                            } else if (activeSlot != -1) {
+                                if (currentAbsenceState == AbsenceState.BUFFER) {
+                                    val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                                    val remainingBufferSec = ((absenceThresholdMs - awayDurationMs) / 1000L).coerceAtLeast(0L)
+                                    val totalBufferSec = absenceThresholdMs / 1000L
+                                    getAdaptiveBeepIntervalMs(false, remainingBufferSec, totalBufferSec)
+                                } else if (currentAbsenceState == AbsenceState.BREAK) {
+                                    val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
+                                    getAdaptiveBeepIntervalMs(true, remainingSec, 1800L)
+                                } else {
+                                    2000L
+                                }
+                            } else {
+                                2000L
+                            }
+
+                            if (now - lastAdjustmentBeepMs > dynamicIntervalMs) {
+                                try {
+                                    toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 80)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                lastAdjustmentBeepMs = now
+                            }
                         }
                     }
-                }
 
-                // ========================================================
-                // 2. CORE DISCIPLINE AND ALARM LOGIC
-                // ========================================================
-                if (activeSlot == -1) {
-                    if (isPreSlotActive) {
-                        tvLiveStatus.text = "⏱️ PRE-SLOT SETUP (SLOT $preSlotNum)"
-                        tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                        tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Audio Beacon Active • Align Phone on Stand"
-                    } else {
-                        tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
-                        tvLiveStatus.setTextColor(Color.GRAY)
-                        tvCountdown.text = "Schedule: Inactive (Silent Mode)"
-                    }
-                    stopAlarmAndFinishAbsence()
-                } else {
-                    val remainingBankSec = getRemainingBreakAllowanceSec(activeSlot)
-                    val usedBufferCount = getBufferUsedCount(activeSlot)
-                    val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
-                    val hasFreeBufferLeft = usedBufferCount < maxBuffers
-
-                    if (isFullyVerifiedAtDesk) {
-                        tvLiveStatus.text = "● STATION LOCKED (STUDENT + ANCHOR VERIFIED)"
-                        tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
-                        val m = remainingBankSec / 60
-                        val s = remainingBankSec % 60
-                        val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
-                        tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
+                    // ========================================================
+                    // 2. DISCIPLINE TRACKING AND ALARM ENFORCEMENT
+                    // ========================================================
+                    if (activeSlot == -1) {
+                        if (isPreSlotActive) {
+                            tvLiveStatus.text = "⏱️ PRE-SLOT SETUP (SLOT $preSlotNum)"
+                            tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                            tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Audio Beacon Active • Align Phone on Stand"
+                        } else {
+                            tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
+                            tvLiveStatus.setTextColor(Color.GRAY)
+                            tvCountdown.text = "Schedule: Inactive (Silent Mode)"
+                        }
                         stopAlarmAndFinishAbsence()
                     } else {
-                        val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
+                        val remainingBankSec = getRemainingBreakAllowanceSec(activeSlot)
+                        val usedBufferCount = getBufferUsedCount(activeSlot)
+                        val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
+                        val hasFreeBufferLeft = usedBufferCount < maxBuffers
 
-                        if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
-                            val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
-                            tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s)"
-                            tvLiveStatus.setTextColor(Color.parseColor("#FBBF24"))
-                            tvCountdown.text = "Hold on: Movement detected (Checking if seat abandoned)"
+                        if (isFullyVerifiedAtDesk) {
+                            tvLiveStatus.text = "● STATION LOCKED (STUDENT + ANCHOR VERIFIED)"
+                            tvLiveStatus.setTextColor(Color.parseColor("#22C55E"))
+                            val m = remainingBankSec / 60
+                            val s = remainingBankSec % 60
+                            val leftBuff = (maxBuffers - usedBufferCount).coerceAtLeast(0)
+                            tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
                             stopAlarmAndFinishAbsence()
                         } else {
-                            val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                            val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
 
-                            if (hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs) {
-                                val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
-                                tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount, maxBuffers)
-                                tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                                tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Radar Beacon Active)"
+                            if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
+                                val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
+                                tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s)"
+                                tvLiveStatus.setTextColor(Color.parseColor("#FBBF24"))
+                                tvCountdown.text = "Hold on: Movement detected (Checking if seat abandoned)"
                                 stopAlarmAndFinishAbsence()
                             } else {
-                                if (remainingBankSec > 0) {
-                                    val m = remainingBankSec / 60
-                                    val s = remainingBankSec % 60
-                                    val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "AUTO-DEDUCTING"
-                                    val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
-                                    tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
-                                    tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                    tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Radar Active)", m, s)
+                                val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+
+                                if (currentAbsenceState == AbsenceState.BUFFER && awayDurationMs <= absenceThresholdMs) {
+                                    val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
+                                    tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", currentBufferTripNum, maxBuffers)
+                                    tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
+                                    tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Radar Beacon Active)"
                                     stopAlarmAndFinishAbsence()
                                 } else {
-                                    tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
-                                    tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
-                                    tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
+                                    if (remainingBankSec > 0) {
+                                        val m = remainingBankSec / 60
+                                        val s = remainingBankSec % 60
+                                        val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "BUFFER EXPIRED"
+                                        val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
+                                        tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
+                                        tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                                        tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Radar Active)", m, s)
+                                        stopAlarmAndFinishAbsence()
+                                    } else {
+                                        tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
+                                        tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
+                                        tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
 
-                                    if (!isAlarmCurrentlyTracking) {
-                                        alarmTriggerStartMs = System.currentTimeMillis()
-                                        isAlarmCurrentlyTracking = true
+                                        if (!isAlarmCurrentlyTracking) {
+                                            alarmTriggerStartMs = System.currentTimeMillis()
+                                            isAlarmCurrentlyTracking = true
+                                        }
+                                        startAlarm()
                                     }
-                                    startAlarm()
                                 }
                             }
                         }
@@ -1406,15 +1439,19 @@ class MainActivity : AppCompatActivity() {
         val trackerHandler = Handler(Looper.getMainLooper())
         trackerHandler.post(object : Runnable {
             override fun run() {
-                if (currentActiveSlot != -1) {
+                if (isArmingGraceActive) {
+                    armingGraceRemainingSec--
+                    if (armingGraceRemainingSec <= 0) {
+                        isArmingGraceActive = false
+                    }
+                }
+
+                if (isSentryArmed && !isArmingGraceActive && currentActiveSlot != -1) {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
-                    val usedBufferCount = getBufferUsedCount(currentActiveSlot)
-                    val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
-                    val hasFreeBufferLeft = usedBufferCount < maxBuffers
                     val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                     val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
-                    // Low Battery Check (< 20%)
+                    // Low Battery Warning (< 20%)
                     val bat = getBatteryPercentage()
                     if (bat in 1..20 && !hasAnnouncedLowBattery) {
                         hasAnnouncedLowBattery = true
@@ -1436,7 +1473,7 @@ class MainActivity : AppCompatActivity() {
 
                         if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS) {
                             val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
-                            val isInBufferTime = hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs
+                            val isInBufferTime = (currentAbsenceState == AbsenceState.BUFFER) && (awayDurationMs <= absenceThresholdMs)
 
                             if (!isInBufferTime) {
                                 if (remainingBank > 0) {
