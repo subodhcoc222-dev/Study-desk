@@ -236,7 +236,7 @@
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
-                <!-- QUICK BUFFER (WITH 10s OPTION) & USAGE LIMIT CARD -->
+                <!-- QUICK BUFFER (WITH 10s, 1m, 2m, 3m) & USAGE LIMIT CARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -284,21 +284,21 @@
                                 android:textSize="10sp" />
 
                             <RadioButton
+                                android:id="@+id/rb2m"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="2m"
+                                android:textColor="#94A3B8"
+                                android:textSize="10sp" />
+
+                            <RadioButton
                                 android:id="@+id/rb3m"
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:checked="true"
                                 android:text="3m"
-                                android:textColor="#94A3B8"
-                                android:textSize="10sp" />
-
-                            <RadioButton
-                                android:id="@+id/rb5m"
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="5m"
                                 android:textColor="#94A3B8"
                                 android:textSize="10sp" />
                         </RadioGroup>
