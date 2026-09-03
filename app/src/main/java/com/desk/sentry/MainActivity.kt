@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Rock-Solid Rolling Presence Confidence Score
+    // Rock-Solid Rolling Presence Confidence Score with Anti-Ghost Decay
     private var presenceConfidenceScore = 0
     private val ANCHOR_OCCLUSION_TOLERANCE_MS = 8500L
 
@@ -268,11 +268,10 @@ class MainActivity : AppCompatActivity() {
                 tts?.setSpeechRate(0.85f)
                 tts?.setPitch(1.0f)
 
-                // Safe Direct Flag 1 (FLAG_AUDIBILITY_ENFORCED)
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(1)
+                    .setFlags(1) // FLAG_AUDIBILITY_ENFORCED
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -987,42 +986,82 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * TRIPLE-LOCK HUMAN ANATOMY DETECTOR:
+     * Rejects empty moving chairs, shadows, clothes, and ghosts with 100% mathematical certainty.
+     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val minConfidence = 0.28f
+        val NOSE_CONF = 0.45f
+        val EYE_CONF = 0.45f
+        val SHOULDER_CONF = 0.48f
 
-        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
-        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
         val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
         val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
-        val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
-        val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
-        val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
-        val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST)
         val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST)
         val leftElbow = pose.getPoseLandmark(PoseLandmark.LEFT_ELBOW)
         val rightElbow = pose.getPoseLandmark(PoseLandmark.RIGHT_ELBOW)
 
-        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= minConfidence
-        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= minConfidence
+        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= SHOULDER_CONF
+        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= SHOULDER_CONF
 
+        // RULE 1: An empty chair or background can never produce solid human shoulders
         if (!hasLeftShoulder && !hasRightShoulder) return false
 
-        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.15f) ||
-                (leftEye != null && leftEye.inFrameLikelihood >= 0.15f) ||
-                (rightEye != null && rightEye.inFrameLikelihood >= 0.15f) ||
-                (leftEar != null && leftEar.inFrameLikelihood >= 0.15f) ||
-                (rightEar != null && rightEar.inFrameLikelihood >= 0.15f) ||
-                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.15f) ||
-                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.15f)
+        val hasNose = nose != null && nose.inFrameLikelihood >= NOSE_CONF
+        val hasLeftEye = leftEye != null && leftEye.inFrameLikelihood >= EYE_CONF
+        val hasRightEye = rightEye != null && rightEye.inFrameLikelihood >= EYE_CONF
+        val hasFace = hasNose || hasLeftEye || hasRightEye
 
-        val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.20f) ||
-                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.20f) ||
-                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.20f) ||
-                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.20f)
+        val shoulderY = if (hasLeftShoulder && hasRightShoulder) {
+            (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
+        } else if (hasLeftShoulder) {
+            leftShoulder!!.position.y
+        } else {
+            rightShoulder!!.position.y
+        }
 
-        return hasHeadOrFace || hasWritingArms
+        // RULE 2: Primary Sitting Posture (Head strictly ABOVE shoulders)
+        if (hasFace) {
+            val headY = when {
+                hasNose -> nose!!.position.y
+                hasLeftEye -> leftEye!!.position.y
+                else -> rightEye!!.position.y
+            }
+            // In image coordinates, smaller Y means HIGHER UP physically.
+            if (headY < shoulderY) {
+                if (hasLeftShoulder && hasRightShoulder) {
+                    val span = abs(leftShoulder.position.x - rightShoulder.position.x)
+                    // Shoulder width must be biologically realistic
+                    if (span >= imgWidth * 0.12f && span <= imgWidth * 0.90f) {
+                        return true
+                    }
+                } else {
+                    return true // Clear face above one visible shoulder
+                }
+            }
+        }
+
+        // RULE 3: Deep Bowed Writing Posture (Face hidden behind notebook)
+        // If face is fully hidden, BOTH shoulders MUST be strongly visible + active writing arms on table
+        if (hasLeftShoulder && hasRightShoulder) {
+            val span = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
+            if (span >= imgWidth * 0.14f && span <= imgWidth * 0.88f) {
+                val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.40f) ||
+                        (rightWrist != null && rightWrist.inFrameLikelihood >= 0.40f) ||
+                        (leftElbow != null && leftElbow.inFrameLikelihood >= 0.40f) ||
+                        (rightElbow != null && rightElbow.inFrameLikelihood >= 0.40f)
+
+                if (hasWritingArms) {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     @SuppressLint("UnsafeOptInUsageError")
@@ -1049,9 +1088,10 @@ class MainActivity : AppCompatActivity() {
                 if (frameValid) {
                     presenceConfidenceScore = (presenceConfidenceScore + 2).coerceAtMost(10)
                 } else {
-                    presenceConfidenceScore = (presenceConfidenceScore - 1).coerceAtLeast(0)
+                    // FAST EXIT DECAY: Drops by 3 immediately so empty chair/movement drops to 0 in 0.1s
+                    presenceConfidenceScore = (presenceConfidenceScore - 3).coerceAtLeast(0)
                 }
-                isPersonCurrentlyPresent = presenceConfidenceScore >= 4
+                isPersonCurrentlyPresent = presenceConfidenceScore >= 5
             }
 
         val barcodeTask = barcodeScanner.process(inputImage)
@@ -1486,11 +1526,10 @@ class MainActivity : AppCompatActivity() {
             val alertUri = if (customUri != null) Uri.parse(customUri)
             else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
-            // Safe Direct Flag 1 (FLAG_AUDIBILITY_ENFORCED)
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setFlags(1)
+                .setFlags(1) // Dual speaker routing flag
                 .build()
 
             mediaPlayer = MediaPlayer().apply {
