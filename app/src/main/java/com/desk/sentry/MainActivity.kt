@@ -87,12 +87,11 @@ class MainActivity : AppCompatActivity() {
     private var isCurrentlyTakingAutoBreak: Boolean = false
     private var autoBreakStartMs: Long = 0L
 
-    // Rear Camera Alignment Sound State
+    // Rear Camera Alignment Confirmation
     private var wasStationAlignedLastTick = false
-    private var lastAdjustmentBeepMs = 0L
 
     // -------------------------------------------------------------
-    // ADVANCED AI SPEECH, DEBOUNCE, GRACE & ADAPTIVE RADAR STATES
+    // ADVANCED AI SPEECH, DEBOUNCE & ULTRA-FAST RADAR ENGINE
     // -------------------------------------------------------------
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
@@ -104,12 +103,18 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    // 8-Second False-Exit Debounce Threshold for Fallen Pens / Movement
+    // 8-Second Debounce for Fallen Pen / Stretching
     private val FALSE_EXIT_DEBOUNCE_MS = 8000L
 
-    // 45-Second Placement Grace Window upon Arming
+    // 45-Second Setup Window on Arming
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
+
+    // Ultra-Fast Dedicated Beep Loop Variables
+    private var currentBeepIntervalMs = 2000L
+    private var currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
+    private var currentBeepDurationMs = 70
+    private var isAudioRadarActive = false
 
     private val slotLaunchAnnounced = BooleanArray(6) { false }
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
@@ -178,11 +183,11 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        // Default: Sentry is UNARMED on fresh install to prevent false locks
         isSentryArmed = prefs.getBoolean("sentry_armed", false)
 
         try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 85)
+            // Volume set to 100% MAXIMUM for true high-urgency tone
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -214,6 +219,7 @@ class MainActivity : AppCompatActivity() {
 
         startMonitoringLoop()
         startPeriodicTimeTracker()
+        startDedicatedRadarBeepEngine() // Independent High-Speed Beep Engine
     }
 
     private fun initTTS() {
@@ -355,7 +361,6 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Strict No-Negotiation: Back Button does nothing while Armed
         if (!isSentryArmed) {
             super.onBackPressed()
         }
@@ -397,13 +402,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        // UNIFIED ALL-IN-ONE MASTER SWITCH
         switchMasterSentry.setOnClickListener {
             val targetState = switchMasterSentry.isChecked
             switchMasterSentry.isChecked = !targetState
 
             if (targetState) {
-                // ARMING: Start Guard + 45s Setup Grace Window
                 switchMasterSentry.isChecked = true
                 isSentryArmed = true
                 prefs.edit().putBoolean("sentry_armed", true).apply()
@@ -413,7 +416,6 @@ class MainActivity : AppCompatActivity() {
                 armingGraceRemainingSec = 45
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
             } else {
-                // DISARMING: PIN Required to release entire lockdown
                 requirePinVerification("Disarm Master Sentry & Unlock Device") {
                     switchMasterSentry.isChecked = false
                     isSentryArmed = false
@@ -421,6 +423,7 @@ class MainActivity : AppCompatActivity() {
                     stopPersistentBackgroundService()
                     stopAlarmAndFinishAbsence()
                     isArmingGraceActive = false
+                    isAudioRadarActive = false
                     Toast.makeText(this, "Sentry Disarmed. System Unlocked.", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -1153,34 +1156,62 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getAdaptiveBeepIntervalMs(isBreak: Boolean, remainingSec: Long, totalSec: Long): Long {
+    /**
+     * DEDICATED INDEPENDENT AUDIO RADAR ENGINE
+     * Bypasses UI loop throttles to achieve intense 150ms panic pulses.
+     */
+    private fun startDedicatedRadarBeepEngine() {
+        val radarHandler = Handler(Looper.getMainLooper())
+        radarHandler.post(object : Runnable {
+            override fun run() {
+                if (isAudioRadarActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking && toneGenerator != null) {
+                    try {
+                        toneGenerator?.startTone(currentBeepTone, currentBeepDurationMs)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    radarHandler.postDelayed(this, currentBeepIntervalMs)
+                } else {
+                    radarHandler.postDelayed(this, 200)
+                }
+            }
+        })
+    }
+
+    /**
+     * ULTRA-INTENSE RADAR BEEP CALCULATOR
+     * Red Zone fires at 150ms with sharp TONE_PROP_BEEP (~7 beeps per second!)
+     */
+    data class BeepProfile(val intervalMs: Long, val tone: Int, val durationMs: Int)
+
+    private fun calculateUrgentRadarProfile(isBreak: Boolean, remainingSec: Long, totalSec: Long): BeepProfile {
         return if (isBreak) {
             when {
-                remainingSec > 120L -> 2000L
-                remainingSec in 31L..120L -> 1000L
-                else -> 400L
+                remainingSec > 120L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70) // Green: Calm 2.0s
+                remainingSec in 31L..120L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80) // Yellow: Alert 0.7s
+                else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC: 150ms rapid pulse!
             }
         } else {
             when {
-                totalSec <= 15L -> {
+                totalSec <= 15L -> { // 10s test buffer
                     when {
-                        remainingSec > 4L -> 1500L
-                        remainingSec in 2L..4L -> 800L
-                        else -> 350L
+                        remainingSec > 4L -> BeepProfile(1500L, ToneGenerator.TONE_PROP_BEEP2, 70)
+                        remainingSec in 2L..4L -> BeepProfile(600L, ToneGenerator.TONE_PROP_BEEP, 70)
+                        else -> BeepProfile(140L, ToneGenerator.TONE_PROP_BEEP, 50) // RED PANIC
                     }
                 }
-                totalSec <= 65L -> {
+                totalSec <= 65L -> { // 1m buffer
                     when {
-                        remainingSec > 25L -> 2000L
-                        remainingSec in 10L..25L -> 1000L
-                        else -> 400L
+                        remainingSec > 25L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70)
+                        remainingSec in 10L..25L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80)
+                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC
                     }
                 }
-                else -> {
+                else -> { // 2m or 3m Gold Standard buffer
                     when {
-                        remainingSec > 60L -> 2000L
-                        remainingSec in 20L..60L -> 1000L
-                        else -> 400L
+                        remainingSec > 60L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70) // Green: Calm 2.0s
+                        remainingSec in 20L..60L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80) // Yellow: Alert 0.7s
+                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC: Rapid 150ms!
                     }
                 }
             }
@@ -1208,7 +1239,7 @@ class MainActivity : AppCompatActivity() {
                 if (isFullyVerifiedAtDesk) {
                     lastSeenTimestamp = System.currentTimeMillis()
                     if (isArmingGraceActive) {
-                        isArmingGraceActive = false // Early completion if user already sat down
+                        isArmingGraceActive = false
                     }
                 }
 
@@ -1216,11 +1247,13 @@ class MainActivity : AppCompatActivity() {
                 // 0. SAFE MODE / UNARMED / 45s ARMING GRACE WINDOW
                 // ========================================================
                 if (!isSentryArmed) {
+                    isAudioRadarActive = false
                     tvLiveStatus.text = "● SENTRY DISARMED (SAFE MODE)"
                     tvLiveStatus.setTextColor(Color.GRAY)
                     tvCountdown.text = "Normal Phone Mode • Turn on Master Sentry to Arm"
                     stopAlarmAndFinishAbsence()
                 } else if (isArmingGraceActive) {
+                    isAudioRadarActive = false
                     tvLiveStatus.text = "⏱️ PLACEMENT GRACE ACTIVE (${armingGraceRemainingSec}s)"
                     tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
                     tvCountdown.text = "Place phone on stand and sit at desk. No alarms active."
@@ -1232,6 +1265,7 @@ class MainActivity : AppCompatActivity() {
                     if (isFullyVerifiedAtDesk) {
                         deskLostTimestamp = 0L
                         hasAnnouncedExitForCurrentAbsence = false
+                        isAudioRadarActive = false // Instant stop to rapid beeps!
 
                         if (!wasStationAlignedLastTick) {
                             try {
@@ -1241,7 +1275,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             wasStationAlignedLastTick = true
 
-                            // ENTRY ANNOUNCEMENT FLOW
+                            // ENTRY ANNOUNCEMENTS
                             if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                                 slotLaunchAnnounced[activeSlot] = true
                                 mainHandler.postDelayed({
@@ -1321,40 +1355,33 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // ========================================================
-                        // 3-STAGE DYNAMIC AUDIO RADAR BEACON BEEP
-                        // ========================================================
+                        // CONFIGURE DYNAMIC PROFILE FOR RADAR ENGINE
                         val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
 
-                        if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
-                            val now = System.currentTimeMillis()
-
-                            val dynamicIntervalMs: Long = if (isPreSlotActive) {
-                                2000L
+                        if (shouldAudioAssistBeActive) {
+                            if (isPreSlotActive) {
+                                currentBeepIntervalMs = 2000L
+                                currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
+                                currentBeepDurationMs = 70
                             } else if (activeSlot != -1) {
-                                if (currentAbsenceState == AbsenceState.BUFFER) {
+                                val profile = if (currentAbsenceState == AbsenceState.BUFFER) {
                                     val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
                                     val remainingBufferSec = ((absenceThresholdMs - awayDurationMs) / 1000L).coerceAtLeast(0L)
                                     val totalBufferSec = absenceThresholdMs / 1000L
-                                    getAdaptiveBeepIntervalMs(false, remainingBufferSec, totalBufferSec)
+                                    calculateUrgentRadarProfile(false, remainingBufferSec, totalBufferSec)
                                 } else if (currentAbsenceState == AbsenceState.BREAK) {
                                     val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
-                                    getAdaptiveBeepIntervalMs(true, remainingSec, 1800L)
+                                    calculateUrgentRadarProfile(true, remainingSec, 1800L)
                                 } else {
-                                    2000L
+                                    BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70)
                                 }
-                            } else {
-                                2000L
+                                currentBeepIntervalMs = profile.intervalMs
+                                currentBeepTone = profile.tone
+                                currentBeepDurationMs = profile.durationMs
                             }
-
-                            if (now - lastAdjustmentBeepMs > dynamicIntervalMs) {
-                                try {
-                                    toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 80)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                                lastAdjustmentBeepMs = now
-                            }
+                            isAudioRadarActive = true
+                        } else {
+                            isAudioRadarActive = false
                         }
                     }
 
@@ -1402,7 +1429,7 @@ class MainActivity : AppCompatActivity() {
                                     val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
                                     tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", currentBufferTripNum, maxBuffers)
                                     tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                                    tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Radar Beacon Active)"
+                                    tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Radar Active: ${currentBeepIntervalMs}ms)"
                                     stopAlarmAndFinishAbsence()
                                 } else {
                                     if (remainingBankSec > 0) {
@@ -1412,7 +1439,7 @@ class MainActivity : AppCompatActivity() {
                                         val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
                                         tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
                                         tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                        tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Radar Active)", m, s)
+                                        tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm (Radar: %dms)", m, s, currentBeepIntervalMs)
                                         stopAlarmAndFinishAbsence()
                                     } else {
                                         tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
@@ -1451,7 +1478,6 @@ class MainActivity : AppCompatActivity() {
                     val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
                     val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
-                    // Low Battery Warning (< 20%)
                     val bat = getBatteryPercentage()
                     if (bat in 1..20 && !hasAnnouncedLowBattery) {
                         hasAnnouncedLowBattery = true
@@ -1661,6 +1687,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isAudioRadarActive = false
         mediaPlayer?.release()
         mediaPlayer = null
         toneGenerator?.release()
