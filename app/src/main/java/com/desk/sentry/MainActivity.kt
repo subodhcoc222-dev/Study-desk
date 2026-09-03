@@ -39,14 +39,13 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.FaceDetection
-import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseLandmark
@@ -56,6 +55,7 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -73,12 +73,11 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Rock-Solid Rolling Presence Confidence Score
+    // Rock-Solid Presence Tracking
     private var presenceConfidenceScore = 0
     private val ANCHOR_OCCLUSION_TOLERANCE_MS = 15000L
 
-    // Dedicated Biological Human Face Tracking (Anti-Chair Lock)
-    private var lastRealFaceSeenTimestamp = 0L
+    // Sustained Presence Timer (Must be present for 1.2s to prevent chair flickers)
     private var sustainedPresenceStartMs = 0L
 
     // Alignment Diagnostic State Machine
@@ -269,6 +268,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * CRISP NATURAL VOICE:
+     * British male configuration with standard pitch and rate.
+     */
     private fun initCleanTTS() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -433,15 +436,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        previewView.setOnLongClickListener {
-            val current = prefs.getBoolean("require_qr_anchor", true)
-            val target = !current
-            prefs.edit().putBoolean("require_qr_anchor", target).apply()
-            val msg = if (target) "Dual Guard Active: User + QR Required" else "Pose Guard Active: QR Disabled"
-            speak(if (target) "Dual guard on." else "Dual guard off.", true)
-            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-            true
-        }
+        // Strict Security: Long press bypass completely removed!
 
         switchMasterSentry.setOnClickListener {
             val target = switchMasterSentry.isChecked
@@ -1002,26 +997,16 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = if (isUsingBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
 
-                // 1. DEDICATED REAL HUMAN FACE DETECTOR (Cannot be fooled by office chairs)
-                val faceOptions = FaceDetectorOptions.Builder()
-                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                    .setMinFaceSize(0.12f)
-                    .build()
-                val faceDetector = FaceDetection.getClient(faceOptions)
-
-                // 2. Pose detector for writing and arm tracking
                 val poseOptions = PoseDetectorOptions.Builder()
                     .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
                     .build()
                 val poseDetector = PoseDetection.getClient(poseOptions)
 
-                // 3. QR Anchor Scanner
                 val barcodeOptions = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                 val barcodeScanner = BarcodeScanning.getClient(barcodeOptions)
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-                // FULL 1080P HD (1920x1080) FOR SHARP DISTANT QR READING
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
@@ -1029,7 +1014,7 @@ class MainActivity : AppCompatActivity() {
                     .build()
 
                 imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                    processCameraFrame(imageProxy, faceDetector, poseDetector, barcodeScanner)
+                    processCameraFrame(imageProxy, poseDetector, barcodeScanner)
                 }
 
                 cameraProvider?.unbindAll()
@@ -1045,29 +1030,72 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun isPoseWriting(pose: Pose): Boolean {
+    /**
+     * ADVANCED ANTI-CHAIR HUMAN ANATOMY FILTER:
+     * High confidence thresholds & strict anatomical vertical layering (Eyes above Nose, Nose above Mouth, Shoulders broad).
+     * An office chair headrest/frame CANNOT fake this biological arrangement.
+     */
+    private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
+        val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
+        val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
+        val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
+        val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
+        val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
+
         val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST)
         val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST)
         val leftElbow = pose.getPoseLandmark(PoseLandmark.LEFT_ELBOW)
         val rightElbow = pose.getPoseLandmark(PoseLandmark.RIGHT_ELBOW)
 
-        val hasShoulders = (leftShoulder != null && leftShoulder.inFrameLikelihood >= 0.40f) ||
-                (rightShoulder != null && rightShoulder.inFrameLikelihood >= 0.40f)
+        // Rule 1: High-confidence Human Face with Strict Geometric Proportions
+        val hasSolidNose = nose != null && nose.inFrameLikelihood >= 0.65f
+        val hasSolidEye = (leftEye != null && leftEye.inFrameLikelihood >= 0.60f) || (rightEye != null && rightEye.inFrameLikelihood >= 0.60f)
+        val hasSolidShoulder = (leftShoulder != null && leftShoulder.inFrameLikelihood >= 0.50f) || (rightShoulder != null && rightShoulder.inFrameLikelihood >= 0.50f)
 
-        val hasArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.35f) ||
-                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.35f) ||
-                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.35f) ||
-                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.35f)
+        if (hasSolidNose && hasSolidEye && hasSolidShoulder) {
+            val noseY = nose!!.position.y
+            val eyeY = if (leftEye != null && leftEye.inFrameLikelihood >= 0.60f) leftEye.position.y else rightEye!!.position.y
+            val shoulderY = if (leftShoulder != null && leftShoulder.inFrameLikelihood >= 0.50f) leftShoulder.position.y else rightShoulder!!.position.y
 
-        return hasShoulders && hasArms
+            // Strict Vertical Order: Eye must be HIGHER than nose, and Nose must be HIGHER than shoulder!
+            if (eyeY < noseY && noseY < shoulderY) {
+                // If both shoulders exist, verify broad human width (chairs are too narrow)
+                if (leftShoulder != null && rightShoulder != null &&
+                    leftShoulder.inFrameLikelihood >= 0.40f && rightShoulder.inFrameLikelihood >= 0.40f) {
+                    val span = abs(leftShoulder.position.x - rightShoulder.position.x)
+                    if (span >= imgWidth * 0.14f) {
+                        return true
+                    }
+                } else {
+                    return true
+                }
+            }
+        }
+
+        // Rule 2: Deep Bowed Writing Posture (Face hidden behind notebook, but human arms on desk)
+        if (leftShoulder != null && rightShoulder != null &&
+            leftShoulder.inFrameLikelihood >= 0.55f && rightShoulder.inFrameLikelihood >= 0.55f) {
+            val span = abs(leftShoulder.position.x - rightShoulder.position.x)
+            if (span >= imgWidth * 0.16f) {
+                val hasDeskArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.45f && leftWrist.position.y >= imgHeight * 0.40f) ||
+                        (rightWrist != null && rightWrist.inFrameLikelihood >= 0.45f && rightWrist.position.y >= imgHeight * 0.40f) ||
+                        (leftElbow != null && leftElbow.inFrameLikelihood >= 0.45f && leftElbow.position.y >= imgHeight * 0.40f) ||
+                        (rightElbow != null && rightElbow.inFrameLikelihood >= 0.45f && rightElbow.position.y >= imgHeight * 0.40f)
+
+                if (hasDeskArms) {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     @SuppressLint("UnsafeOptInUsageError")
     private fun processCameraFrame(
         imageProxy: ImageProxy,
-        faceDetector: com.google.mlkit.vision.face.FaceDetector,
         poseDetector: com.google.mlkit.vision.pose.PoseDetector,
         barcodeScanner: com.google.mlkit.vision.barcode.BarcodeScanner
     ) {
@@ -1078,22 +1106,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         val rotation = imageProxy.imageInfo.rotationDegrees
+        val isRotated = rotation == 90 || rotation == 270
+        val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
+        val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
         val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
-
-        var hasBiologicalFace = false
-        var hasPoseWritingArms = false
-
-        val faceTask = faceDetector.process(inputImage)
-            .addOnSuccessListener { faces ->
-                if (faces.isNotEmpty()) {
-                    hasBiologicalFace = true
-                    lastRealFaceSeenTimestamp = System.currentTimeMillis()
-                }
-            }
 
         val poseTask = poseDetector.process(inputImage)
             .addOnSuccessListener { pose ->
-                hasPoseWritingArms = isPoseWriting(pose)
+                val frameValid = isRealDeskUser(pose, effWidth, effHeight)
+                if (frameValid) {
+                    presenceConfidenceScore = (presenceConfidenceScore + 1).coerceAtMost(5)
+                } else {
+                    // Instant wipe: Empty chair drops to 0 immediately!
+                    presenceConfidenceScore = 0
+                }
+                isPersonCurrentlyPresent = presenceConfidenceScore >= 3
             }
 
         val barcodeTask = barcodeScanner.process(inputImage)
@@ -1106,22 +1133,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-        Tasks.whenAllComplete(faceTask, poseTask, barcodeTask)
+        // Robust Collection overload to prevent ambiguity
+        Tasks.whenAllComplete(listOf<Task<*>>(poseTask, barcodeTask))
             .addOnCompleteListener {
-                val now = System.currentTimeMillis()
-                // A person is ONLY real if a genuine face is present, or was seen in last 5s while writing arms are visible
-                val faceRecentlyConfirmed = (now - lastRealFaceSeenTimestamp) <= 5000L
-                val isRealHuman = hasBiologicalFace || (faceRecentlyConfirmed && hasPoseWritingArms)
-
-                if (isRealHuman) {
-                    presenceConfidenceScore = (presenceConfidenceScore + 2).coerceAtMost(10)
-                } else {
-                    // Empty chair immediately wipes score to 0
-                    presenceConfidenceScore = (presenceConfidenceScore - 3).coerceAtLeast(0)
-                }
-
-                isPersonCurrentlyPresent = presenceConfidenceScore >= 6
-
                 try {
                     imageProxy.close()
                 } catch (e: Exception) {
@@ -1189,7 +1203,7 @@ class MainActivity : AppCompatActivity() {
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
 
                 if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode && isSentryArmed) {
-                    speak("Study session finished. Good job!")
+                    speak("Slot $lastTrackedSlot complete. Great work. Take a break.")
                 }
                 lastTrackedSlot = activeSlot
                 currentActiveSlot = activeSlot
@@ -1197,13 +1211,11 @@ class MainActivity : AppCompatActivity() {
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
-                val isAnchorRequired = prefs.getBoolean("require_qr_anchor", true)
-                val isAnchorValid = if (!isAnchorRequired) true else ((System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS)
+                val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
                 val rawVerified = isPersonCurrentlyPresent && isAnchorValid
-
                 val now = System.currentTimeMillis()
 
-                // SUSTAINED RETURN FILTER (Must be continuously verified for 1.2s to prevent chair flickers)
+                // SUSTAINED PRESENCE FILTER (Must be continuously present for 1200ms to count as seated)
                 if (rawVerified) {
                     if (sustainedPresenceStartMs == 0L) sustainedPresenceStartMs = now
                 } else {
@@ -1213,7 +1225,7 @@ class MainActivity : AppCompatActivity() {
                 val isFullyVerifiedAtDesk = rawVerified && (sustainedPresenceStartMs > 0L && (now - sustainedPresenceStartMs >= 1200L))
                 val awaySinceMs = if (deskLostTimestamp > 0L) now - deskLostTimestamp else 0L
 
-                // Diagnostic engine: Strictly muted during breaks and buffers
+                // Diagnostic voice: strictly muted during breaks & buffers
                 val isUserOnLegitimateAbsence = (currentAbsenceState != AbsenceState.NONE) ||
                         hasAnnouncedExitForCurrentAbsence ||
                         (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS)
@@ -1237,7 +1249,7 @@ class MainActivity : AppCompatActivity() {
                             val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L) && (diagnosticDebounceState != "VERIFIED")
                             if (isNew || isNag) {
                                 when (diagnosticDebounceState) {
-                                    "USER_OK_QR_MISSING" -> speak("Please adjust QR code.")
+                                    "USER_OK_QR_MISSING" -> speak("QR code missing. Please adjust.")
                                     "STAND_READY_USER_MISSING" -> speak("Stand ready. Take your seat.")
                                     "SETUP_INCOMPLETE" -> speak("Place phone on stand.")
                                 }
@@ -1246,7 +1258,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     } else if (activeSlot != -1) {
-                        if (isPersonCurrentlyPresent && !isAnchorValid && isAnchorRequired) {
+                        if (isPersonCurrentlyPresent && !isAnchorValid) {
                             if (diagnosticDebounceState != "USER_OK_QR_MISSING") {
                                 diagnosticDebounceState = "USER_OK_QR_MISSING"
                                 diagnosticDebounceStartTime = now
@@ -1255,7 +1267,7 @@ class MainActivity : AppCompatActivity() {
                                 val isNew = lastSpokenDiagnostic != "USER_OK_QR_MISSING"
                                 val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L)
                                 if (isNew || isNag) {
-                                    speak("Please adjust QR code.")
+                                    speak("QR code missing. Please adjust.")
                                     lastSpokenDiagnostic = "USER_OK_QR_MISSING"
                                     lastDiagnosticSpokenTimestamp = now
                                 }
@@ -1271,7 +1283,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val personTag = if (isPersonCurrentlyPresent) "👤 User: ✓" else "👤 User: ✗"
-                val anchorTag = if (!isAnchorRequired) "🏷️ QR: OFF" else if (isAnchorValid) "🏷️ QR: ✓" else "🏷️ QR: ✗"
+                val anchorTag = if (isAnchorValid) "🏷️ QR: ✓" else "🏷️ QR: ✗"
 
                 if (isFullyVerifiedAtDesk) {
                     lastSeenTimestamp = System.currentTimeMillis()
@@ -1302,21 +1314,21 @@ class MainActivity : AppCompatActivity() {
 
                             if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                                 slotLaunchAnnounced[activeSlot] = true
-                                speak("Desk ready. Study started.")
+                                speak("Study slot started. Go!")
                             } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
                                 preSlotReadyAnnounced[preSlotNum] = true
-                                speak("Desk ready. Camera on.")
+                                speak("Station locked. Camera ready.")
                             } else if (currentAbsenceState == AbsenceState.BUFFER) {
                                 val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                                 val used = getBufferUsedCount(activeSlot)
                                 val left = (maxBuffers - used).coerceAtLeast(0)
                                 val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
-                                speak("Welcome back. Buffer ended. $leftStr.")
+                                speak("Station locked. Buffer complete. $leftStr.")
                                 currentAbsenceState = AbsenceState.NONE
                             } else if (currentAbsenceState == AbsenceState.BREAK) {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                speak("Welcome back. Break paused. $mins minutes left.")
+                                speak("Station locked. Break paused. $mins minutes left.")
                                 currentAbsenceState = AbsenceState.NONE
                             }
                         }
@@ -1338,7 +1350,7 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Break started. $mins minutes left.") else speak("Break ending. Under one minute left.")
+                                if (mins >= 1) speak("Break started. $mins minutes left.") else speak("Break critical. Under one minute left.")
                                 currentAbsenceState = AbsenceState.BREAK
                             }
                             hasAnnouncedExitForCurrentAbsence = true
@@ -1350,8 +1362,8 @@ class MainActivity : AppCompatActivity() {
                                 currentAbsenceState = AbsenceState.BREAK
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Buffer ended. Break started. $mins minutes left.")
-                                else speak("Buffer ended. Under one minute left.")
+                                if (mins >= 1) speak("Buffer expired. Break started. $mins minutes left.")
+                                else speak("Buffer expired. Under one minute left.")
                             }
                         }
 
@@ -1469,8 +1481,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (isSentryArmed && !isArmingGraceActive && currentActiveSlot != -1) {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
-                    val isAnchorRequired = prefs.getBoolean("require_qr_anchor", true)
-                    val isAnchorValid = if (!isAnchorRequired) true else ((System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS)
+                    val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
                     val rawVerified = isPersonCurrentlyPresent && isAnchorValid
                     val isFullyVerifiedAtDesk = rawVerified && (sustainedPresenceStartMs > 0L && (System.currentTimeMillis() - sustainedPresenceStartMs >= 1200L))
 
