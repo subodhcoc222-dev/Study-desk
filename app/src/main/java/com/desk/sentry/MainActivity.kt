@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Rock-Solid Presence Confidence Score
+    // Rock-Solid Rolling Presence Confidence Score
     private var presenceConfidenceScore = 0
     private val ANCHOR_OCCLUSION_TOLERANCE_MS = 8500L
 
@@ -268,10 +268,11 @@ class MainActivity : AppCompatActivity() {
                 tts?.setSpeechRate(0.85f)
                 tts?.setPitch(1.0f)
 
+                // Safe Direct Flag 1 (FLAG_AUDIBILITY_ENFORCED)
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                    .setFlags(1)
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -1059,7 +1060,7 @@ class MainActivity : AppCompatActivity() {
                     lastAnchorSeenTimestamp = System.currentTimeMillis()
                     isAnchorCurrentlyPresent = true
                 } else {
-                    isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSTER_TOLERANCE_MS_RESOLVE()
+                    isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
                 }
             }
 
@@ -1072,8 +1073,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
     }
-
-    private fun ANCHOR_OCCLUSTER_TOLERANCE_MS_RESOLVE(): Long = ANCHOR_OCCLUSION_TOLERANCE_MS
 
     private fun startDedicatedRadarBeepEngine() {
         val radarHandler = Handler(Looper.getMainLooper())
@@ -1487,10 +1486,11 @@ class MainActivity : AppCompatActivity() {
             val alertUri = if (customUri != null) Uri.parse(customUri)
             else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
+            // Safe Direct Flag 1 (FLAG_AUDIBILITY_ENFORCED)
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                .setFlags(1)
                 .build()
 
             mediaPlayer = MediaPlayer().apply {
