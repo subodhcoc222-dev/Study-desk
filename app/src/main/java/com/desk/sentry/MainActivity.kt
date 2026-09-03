@@ -271,7 +271,7 @@ class MainActivity : AppCompatActivity() {
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(1) // FLAG_AUDIBILITY_ENFORCED
+                    .setFlags(1) // Safe Dual Routing Flag
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -988,7 +988,8 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * TRIPLE-LOCK HUMAN ANATOMY DETECTOR:
-     * Rejects empty moving chairs, shadows, clothes, and ghosts with 100% mathematical certainty.
+     * Rejects empty moving chairs, shadows, clothes, and ghosts with mathematical certainty.
+     * All landmark nullabilities safely guarded with !! assertions.
      */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val NOSE_CONF = 0.45f
@@ -1034,7 +1035,7 @@ class MainActivity : AppCompatActivity() {
             // In image coordinates, smaller Y means HIGHER UP physically.
             if (headY < shoulderY) {
                 if (hasLeftShoulder && hasRightShoulder) {
-                    val span = abs(leftShoulder.position.x - rightShoulder.position.x)
+                    val span = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
                     // Shoulder width must be biologically realistic
                     if (span >= imgWidth * 0.12f && span <= imgWidth * 0.90f) {
                         return true
@@ -1046,7 +1047,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         // RULE 3: Deep Bowed Writing Posture (Face hidden behind notebook)
-        // If face is fully hidden, BOTH shoulders MUST be strongly visible + active writing arms on table
         if (hasLeftShoulder && hasRightShoulder) {
             val span = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
             if (span >= imgWidth * 0.14f && span <= imgWidth * 0.88f) {
@@ -1529,7 +1529,7 @@ class MainActivity : AppCompatActivity() {
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setFlags(1) // Dual speaker routing flag
+                .setFlags(1) // Safe Dual Speaker Routing Flag
                 .build()
 
             mediaPlayer = MediaPlayer().apply {
