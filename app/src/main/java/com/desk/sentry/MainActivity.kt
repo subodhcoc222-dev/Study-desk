@@ -87,16 +87,12 @@ class MainActivity : AppCompatActivity() {
     private var isCurrentlyTakingAutoBreak: Boolean = false
     private var autoBreakStartMs: Long = 0L
 
-    // Quick Buffer Usage Trip State
-    private var isCurrentlyInBufferTrip: Boolean = false
-    private var bufferTripStartMs: Long = 0L
-
     // Rear Camera Alignment Sound State
     private var wasStationAlignedLastTick = false
     private var lastAdjustmentBeepMs = 0L
 
     // -------------------------------------------------------------
-    // ADVANCED AI SPEECH & AUTOMATION STATES
+    // ADVANCED AI SPEECH & 8-SECOND FALSE EXIT DEBOUNCE STATES
     // -------------------------------------------------------------
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
@@ -107,6 +103,9 @@ class MainActivity : AppCompatActivity() {
     private var currentBufferTripNum = 0
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
+
+    // 8-Second Debounce Threshold for Fallen Pens / Short Movements
+    private val FALSE_EXIT_DEBOUNCE_MS = 8000L
 
     private val slotLaunchAnnounced = BooleanArray(6) { false }
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
@@ -451,7 +450,6 @@ class MainActivity : AppCompatActivity() {
             lastTapTime = currentTime
         }
 
-        // 10s, 1m, 2m, 3m (Default 3m) Buffer Options
         for (i in 0 until rgGracePeriod.childCount) {
             val rb = rgGracePeriod.getChildAt(i) as? RadioButton
             rb?.setOnClickListener {
@@ -1226,9 +1224,10 @@ class MainActivity : AppCompatActivity() {
                         deskLostTimestamp = System.currentTimeMillis()
                     }
 
-                    // 2-SECOND FALSE-EXIT DEBOUNCE (e.g. picking up fallen pen)
                     val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
-                    if (awaySinceMs >= 2000L && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
+
+                    // 8-SECOND FALSE-EXIT DEBOUNCE (Fallen Pen / Stretching / Quick Shift Protection)
+                    if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
                         val usedBufferCount = getBufferUsedCount(activeSlot)
                         val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
 
@@ -1254,8 +1253,11 @@ class MainActivity : AppCompatActivity() {
                         hasAnnouncedExitForCurrentAbsence = true
                     }
 
-                    // AUDIO BEACON SEARCHING BEEP (Every 1.8s while away or setting up)
-                    val shouldAudioAssistBeActive = (activeSlot != -1) || isPreSlotActive
+                    // AUDIO BEACON SEARCHING BEEP
+                    // Pre-Slot: Active immediately for phone setup
+                    // Active Slot: Active ONLY after 8s debounce confirms actual departure
+                    val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
+
                     if (shouldAudioAssistBeActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking) {
                         val now = System.currentTimeMillis()
                         if (now - lastAdjustmentBeepMs > 1800L) {
@@ -1298,34 +1300,45 @@ class MainActivity : AppCompatActivity() {
                         tvCountdown.text = String.format("Desk: Verified ✓ | Buffers: %d left | Bank: %02dm %02ds", leftBuff, m, s)
                         stopAlarmAndFinishAbsence()
                     } else {
-                        val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                        val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
 
-                        if (hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs) {
-                            val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
-                            tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount, maxBuffers)
-                            tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
-                            tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Beacon Active)"
+                        if (awaySinceMs < FALSE_EXIT_DEBOUNCE_MS) {
+                            // User briefly bent down (pen dropped) - Grace observation
+                            val remainingGraceSec = ((FALSE_EXIT_DEBOUNCE_MS - awaySinceMs) / 1000).toInt() + 1
+                            tvLiveStatus.text = "● VERIFYING MOVEMENT (${remainingGraceSec}s)"
+                            tvLiveStatus.setTextColor(Color.parseColor("#FBBF24"))
+                            tvCountdown.text = "Hold on: Movement detected (Checking if seat abandoned)"
                             stopAlarmAndFinishAbsence()
                         } else {
-                            if (remainingBankSec > 0) {
-                                val m = remainingBankSec / 60
-                                val s = remainingBankSec % 60
-                                val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "AUTO-DEDUCTING"
-                                val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
-                                tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
-                                tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
-                                tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
+                            val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+
+                            if (hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs) {
+                                val secondsLeft = ((absenceThresholdMs - awayDurationMs) / 1000).toInt()
+                                tvLiveStatus.text = String.format("● QUICK BUFFER [Use %d/%d]", usedBufferCount, maxBuffers)
+                                tvLiveStatus.setTextColor(Color.parseColor("#F59E0B"))
+                                tvCountdown.text = "Buffer Remaining: ${secondsLeft}s (Beacon Active)"
                                 stopAlarmAndFinishAbsence()
                             } else {
-                                tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
-                                tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
-                                tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
+                                if (remainingBankSec > 0) {
+                                    val m = remainingBankSec / 60
+                                    val s = remainingBankSec % 60
+                                    val reason = if (!hasFreeBufferLeft) "BUFFERS EXHAUSTED" else "AUTO-DEDUCTING"
+                                    val missingWhat = if (!isAnchorValid) "ANCHOR MISSING" else "USER AWAY"
+                                    tvLiveStatus.text = "☕ ON BREAK ($missingWhat • $reason)"
+                                    tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
+                                    tvCountdown.text = String.format("Break Bank Left: %02dm %02ds before Alarm", m, s)
+                                    stopAlarmAndFinishAbsence()
+                                } else {
+                                    tvLiveStatus.text = "⚠ BREAK EXHAUSTED: ALARM ACTIVE"
+                                    tvLiveStatus.setTextColor(Color.parseColor("#EF4444"))
+                                    tvCountdown.text = "STATUS: 100% MAX ALARM RINGING (RETURN TO DESK)"
 
-                                if (!isAlarmCurrentlyTracking) {
-                                    alarmTriggerStartMs = System.currentTimeMillis()
-                                    isAlarmCurrentlyTracking = true
+                                    if (!isAlarmCurrentlyTracking) {
+                                        alarmTriggerStartMs = System.currentTimeMillis()
+                                        isAlarmCurrentlyTracking = true
+                                    }
+                                    startAlarm()
                                 }
-                                startAlarm()
                             }
                         }
                     }
@@ -1365,22 +1378,27 @@ class MainActivity : AppCompatActivity() {
                             isCurrentlyTakingAutoBreak = false
                         }
                     } else {
-                        val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
-                        val isInBufferTime = hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs
+                        val awaySinceMs = if (deskLostTimestamp > 0L) System.currentTimeMillis() - deskLostTimestamp else 0L
 
-                        if (!isInBufferTime) {
-                            if (remainingBank > 0) {
-                                setRemainingBreakAllowanceSec(currentActiveSlot, remainingBank - 1)
+                        // If within 8s debounce, protect break bank from premature deductions
+                        if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS) {
+                            val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
+                            val isInBufferTime = hasFreeBufferLeft && awayDurationMs <= absenceThresholdMs
 
-                                if (!isCurrentlyTakingAutoBreak) {
-                                    autoBreakStartMs = System.currentTimeMillis()
-                                    isCurrentlyTakingAutoBreak = true
-                                }
-                            } else {
-                                if (isCurrentlyTakingAutoBreak) {
-                                    val durationSec = ((System.currentTimeMillis() - autoBreakStartMs) / 1000L).coerceAtLeast(1L)
-                                    recordOfficialBreakInterval(currentActiveSlot, autoBreakStartMs, System.currentTimeMillis(), durationSec)
-                                    isCurrentlyTakingAutoBreak = false
+                            if (!isInBufferTime) {
+                                if (remainingBank > 0) {
+                                    setRemainingBreakAllowanceSec(currentActiveSlot, remainingBank - 1)
+
+                                    if (!isCurrentlyTakingAutoBreak) {
+                                        autoBreakStartMs = System.currentTimeMillis()
+                                        isCurrentlyTakingAutoBreak = true
+                                    }
+                                } else {
+                                    if (isCurrentlyTakingAutoBreak) {
+                                        val durationSec = ((System.currentTimeMillis() - autoBreakStartMs) / 1000L).coerceAtLeast(1L)
+                                        recordOfficialBreakInterval(currentActiveSlot, autoBreakStartMs, System.currentTimeMillis(), durationSec)
+                                        isCurrentlyTakingAutoBreak = false
+                                    }
                                 }
                             }
                         }
