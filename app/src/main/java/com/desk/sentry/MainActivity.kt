@@ -26,7 +26,6 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.speech.tts.Voice
 import android.util.Size
 import android.view.Gravity
 import android.view.View
@@ -74,9 +73,12 @@ class MainActivity : AppCompatActivity() {
 
     // Rock-Solid Rolling Presence Confidence Score
     private var presenceConfidenceScore = 0
-    private val ANCHOR_OCCLUSION_TOLERANCE_MS = 15000L // 15s memory for far background QR
+    private val ANCHOR_OCCLUSION_TOLERANCE_MS = 15000L
 
-    // Polite Alignment Diagnostic State Machine
+    // Sustained return timer to eliminate chair motion flicker
+    private var sustainedPresenceStartMs = 0L
+
+    // Alignment Diagnostic State Machine
     private var lastSpokenDiagnostic = ""
     private var lastDiagnosticSpokenTimestamp = 0L
     private var diagnosticDebounceState = ""
@@ -178,7 +180,7 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
 
-        initJarvisTTS()
+        initCleanTTS()
         checkAllPermissions()
         checkAndProcessDeviceShutdownRecovery()
 
@@ -265,28 +267,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * AUTHENTIC JARVIS BRITISH MALE ENGINE:
-     * Enforces Google UK Male models (rjs, gbb, gbd) and eliminates female fallback.
+     * CRISP, NATURAL BRITISH MALE TTS:
+     * Normal pitch and rate for 100% clarity and punch. No muffled deepness.
      */
-    private fun initJarvisTTS() {
+    private fun initCleanTTS() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val ukLocale = Locale.UK
                 tts?.setLanguage(ukLocale)
 
-                // Commanding, alert J.A.R.V.I.S. cadence
-                tts?.setPitch(0.95f)
-                tts?.setSpeechRate(1.05f)
+                // 1.0f gives perfectly natural, loud, and crisp voice on phone speakers
+                tts?.setPitch(1.0f)
+                tts?.setSpeechRate(1.0f)
 
                 try {
                     val voices = tts?.voices
-                    val jarvisMaleVoice = voices?.firstOrNull { v ->
+                    val maleVoice = voices?.firstOrNull { v ->
                         val isUk = v.locale.language == "en" &&
                                 (v.locale.country.equals("GB", ignoreCase = true) || v.name.contains("en-gb", ignoreCase = true))
                         val isExplicitMale = v.name.contains("male", ignoreCase = true) ||
-                                v.name.contains("rjs", ignoreCase = true) || // Google UK Male #1
-                                v.name.contains("gbb", ignoreCase = true) || // Google UK Male #2
-                                v.name.contains("gbd", ignoreCase = true)   // Google UK Male #3
+                                v.name.contains("rjs", ignoreCase = true) ||
+                                v.name.contains("gbb", ignoreCase = true) ||
+                                v.name.contains("gbd", ignoreCase = true)
                         val isNotFemale = !v.name.contains("female", ignoreCase = true) &&
                                 !v.name.contains("gba", ignoreCase = true) &&
                                 !v.name.contains("gbc", ignoreCase = true)
@@ -294,8 +296,8 @@ class MainActivity : AppCompatActivity() {
                         isUk && isExplicitMale && isNotFemale && !v.isNetworkConnectionRequired
                     } ?: tts?.defaultVoice
 
-                    if (jarvisMaleVoice != null) {
-                        tts?.voice = jarvisMaleVoice
+                    if (maleVoice != null) {
+                        tts?.voice = maleVoice
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -318,10 +320,6 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    /**
-     * UNBROKEN FIFO AUDIO QUEUE:
-     * Uses QUEUE_ADD so sentences never clip or truncate each other.
-     */
     private fun speak(text: String, flush: Boolean = false) {
         if (!isTtsReady || tts == null) return
         mainHandler.post {
@@ -442,8 +440,8 @@ class MainActivity : AppCompatActivity() {
             val current = prefs.getBoolean("require_qr_anchor", true)
             val target = !current
             prefs.edit().putBoolean("require_qr_anchor", target).apply()
-            val msg = if (target) "Dual Guard Active: User + QR Anchor Required" else "Pose Guard Active: QR Anchor Disabled"
-            speak(if (target) "Dual Guard engaged, sir. Anchor verification active." else "Pose Guard engaged, sir. Anchor requirement disabled.", true)
+            val msg = if (target) "Dual Guard Active: User + QR Required" else "Pose Guard Active: QR Disabled"
+            speak(if (target) "Dual guard on." else "Dual guard off.", true)
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             true
         }
@@ -459,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                 startPersistentBackgroundService()
                 isArmingGraceActive = true
                 armingGraceRemainingSec = 45
-                speak("Sentry protocol armed, sir. 45 seconds to secure device on stand.", true)
+                speak("Sentry armed. 45 seconds to place phone.", true)
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
             } else {
                 requirePinVerification("Disarm Master Sentry & Unlock Device") {
@@ -471,7 +469,7 @@ class MainActivity : AppCompatActivity() {
                     isArmingGraceActive = false
                     isAudioRadarActive = false
                     tts?.stop()
-                    speak("Sentry disarmed. System unlocked, sir.", true)
+                    speak("Sentry disarmed.", true)
                     Toast.makeText(this, "Sentry Disarmed. System Unlocked.", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -485,7 +483,7 @@ class MainActivity : AppCompatActivity() {
                 isAlwaysActiveMode = target
                 prefs.edit().putBoolean("always_active_mode", target).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
-                speak(if (target) "Override mode engaged, sir." else "Standard schedule restored, sir.", true)
+                speak(if (target) "Override on." else "Schedule on.", true)
             }
         }
 
@@ -1017,7 +1015,7 @@ class MainActivity : AppCompatActivity() {
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-                // FULL 1080P HD (1920x1080) FOR MAXIMUM DISTANT QR SHARPNESS
+                // FULL 1080P HD (1920x1080)
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
@@ -1041,44 +1039,53 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * ANTI-CHAIR HUMAN ANATOMY FILTER:
+     * Ergonomic headrests have no dual-facial landmarks. Empty chairs are 100% rejected.
+     */
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val SHOULDER_CONF = 0.22f
-        val FACE_CONF = 0.18f
+        val CONF = 0.38f
 
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
         val leftEye = pose.getPoseLandmark(PoseLandmark.LEFT_EYE)
         val rightEye = pose.getPoseLandmark(PoseLandmark.RIGHT_EYE)
-        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
-        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val leftMouth = pose.getPoseLandmark(PoseLandmark.LEFT_MOUTH)
         val rightMouth = pose.getPoseLandmark(PoseLandmark.RIGHT_MOUTH)
-        val leftEar = pose.getPoseLandmark(PoseLandmark.LEFT_EAR)
-        val rightEar = pose.getPoseLandmark(PoseLandmark.RIGHT_EAR)
 
-        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= SHOULDER_CONF
-        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= SHOULDER_CONF
-
-        if (!hasLeftShoulder && !hasRightShoulder) return false
-
-        val hasFace = (nose != null && nose.inFrameLikelihood >= FACE_CONF) ||
-                (leftEye != null && leftEye.inFrameLikelihood >= FACE_CONF) ||
-                (rightEye != null && rightEye.inFrameLikelihood >= FACE_CONF) ||
-                (leftMouth != null && leftMouth.inFrameLikelihood >= FACE_CONF) ||
-                (rightMouth != null && rightMouth.inFrameLikelihood >= FACE_CONF) ||
-                (leftEar != null && leftEar.inFrameLikelihood >= FACE_CONF) ||
-                (rightEar != null && rightEar.inFrameLikelihood >= FACE_CONF)
-
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val leftWrist = pose.getPoseLandmark(PoseLandmark.LEFT_WRIST)
         val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST)
         val leftElbow = pose.getPoseLandmark(PoseLandmark.LEFT_ELBOW)
         val rightElbow = pose.getPoseLandmark(PoseLandmark.RIGHT_ELBOW)
 
-        val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.22f) ||
-                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.22f) ||
-                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.22f) ||
-                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.22f)
+        val hasNose = nose != null && nose.inFrameLikelihood >= CONF
+        val hasEyes = (leftEye != null && leftEye.inFrameLikelihood >= CONF) || (rightEye != null && rightEye.inFrameLikelihood >= CONF)
+        val hasMouth = (leftMouth != null && leftMouth.inFrameLikelihood >= CONF) || (rightMouth != null && rightMouth.inFrameLikelihood >= CONF)
 
-        return hasFace || hasWritingArms
+        // Rule 1: A human face must possess at least two distinct facial landmark types
+        val hasConfirmedFace = (hasNose && hasEyes) || (hasNose && hasMouth) || (hasEyes && hasMouth)
+
+        val hasLeftShoulder = leftShoulder != null && leftShoulder.inFrameLikelihood >= 0.35f
+        val hasRightShoulder = rightShoulder != null && rightShoulder.inFrameLikelihood >= 0.35f
+
+        if (hasConfirmedFace && (hasLeftShoulder || hasRightShoulder)) {
+            return true
+        }
+
+        // Rule 2: Bowed writing posture (Face hidden, both shoulders + active arms on desk)
+        if (hasLeftShoulder && hasRightShoulder) {
+            val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.35f) ||
+                    (rightWrist != null && rightWrist.inFrameLikelihood >= 0.35f) ||
+                    (leftElbow != null && leftElbow.inFrameLikelihood >= 0.35f) ||
+                    (rightElbow != null && rightElbow.inFrameLikelihood >= 0.35f)
+
+            if (hasWritingArms) {
+                return true
+            }
+        }
+
+        return false
     }
 
     @SuppressLint("UnsafeOptInUsageError")
@@ -1103,11 +1110,12 @@ class MainActivity : AppCompatActivity() {
             .addOnSuccessListener { pose ->
                 val frameValid = isRealDeskUser(pose, effWidth, effHeight)
                 if (frameValid) {
-                    presenceConfidenceScore = (presenceConfidenceScore + 1).coerceAtMost(6)
+                    presenceConfidenceScore = (presenceConfidenceScore + 2).coerceAtMost(10)
                 } else {
-                    presenceConfidenceScore = (presenceConfidenceScore - 1).coerceAtLeast(0)
+                    // Instant drop on exit: drops to 0 in 1-2 frames
+                    presenceConfidenceScore = (presenceConfidenceScore - 3).coerceAtLeast(0)
                 }
-                isPersonCurrentlyPresent = presenceConfidenceScore >= 3
+                isPersonCurrentlyPresent = presenceConfidenceScore >= 6
             }
 
         val barcodeTask = barcodeScanner.process(inputImage)
@@ -1189,7 +1197,7 @@ class MainActivity : AppCompatActivity() {
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
 
                 if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode && isSentryArmed) {
-                    speak("Study Slot $lastTrackedSlot concluded, sir. Exceptional focus. You may stand down for break.")
+                    speak("Slot $lastTrackedSlot complete. Great work. Take a break.")
                 }
                 lastTrackedSlot = activeSlot
                 currentActiveSlot = activeSlot
@@ -1199,16 +1207,21 @@ class MainActivity : AppCompatActivity() {
 
                 val isAnchorRequired = prefs.getBoolean("require_qr_anchor", true)
                 val isAnchorValid = if (!isAnchorRequired) true else ((System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS)
-                val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
+                val rawVerified = isPersonCurrentlyPresent && isAnchorValid
 
                 val now = System.currentTimeMillis()
+
+                // SUSTAINED PRESENCE FILTER (Must be present for 1000ms uninterrupted to be verified)
+                if (rawVerified) {
+                    if (sustainedPresenceStartMs == 0L) sustainedPresenceStartMs = now
+                } else {
+                    sustainedPresenceStartMs = 0L
+                }
+
+                val isFullyVerifiedAtDesk = rawVerified && (now - sustainedPresenceStartMs >= 1000L)
                 val awaySinceMs = if (deskLostTimestamp > 0L) now - deskLostTimestamp else 0L
 
-                // =========================================================================
-                // POLITE JARVIS DIAGNOSTIC ENGINE:
-                // STRICTLY SILENT during intentional buffers, breaks, or when away!
-                // ONLY assists when user is sitting at desk with QR missing or pre-slot setup.
-                // =========================================================================
+                // Diagnostic engine: only speaks when user is sitting but QR missing
                 val isUserOnLegitimateAbsence = (currentAbsenceState != AbsenceState.NONE) ||
                         hasAnnouncedExitForCurrentAbsence ||
                         (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS)
@@ -1216,7 +1229,7 @@ class MainActivity : AppCompatActivity() {
                 if (isSentryArmed && !isUserOnLegitimateAbsence) {
                     if (isPreSlotActive || isArmingGraceActive) {
                         val currentDiag = when {
-                            isPersonCurrentlyPresent && isAnchorValid -> "VERIFIED"
+                            isFullyVerifiedAtDesk -> "VERIFIED"
                             isPersonCurrentlyPresent && !isAnchorValid -> "USER_OK_QR_MISSING"
                             !isPersonCurrentlyPresent && isAnchorValid -> "STAND_READY_USER_MISSING"
                             else -> "SETUP_INCOMPLETE"
@@ -1232,9 +1245,9 @@ class MainActivity : AppCompatActivity() {
                             val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L) && (diagnosticDebounceState != "VERIFIED")
                             if (isNew || isNag) {
                                 when (diagnosticDebounceState) {
-                                    "USER_OK_QR_MISSING" -> speak("User verified, sir. Wall anchor occluded.")
-                                    "STAND_READY_USER_MISSING" -> speak("Stand aligned, sir. Please take your seat.")
-                                    "SETUP_INCOMPLETE" -> speak("Please position the device on stand, sir.")
+                                    "USER_OK_QR_MISSING" -> speak("User OK. QR missing.")
+                                    "STAND_READY_USER_MISSING" -> speak("Stand ready. Take your seat.")
+                                    "SETUP_INCOMPLETE" -> speak("Place phone on stand.")
                                 }
                                 lastSpokenDiagnostic = diagnosticDebounceState
                                 lastDiagnosticSpokenTimestamp = now
@@ -1250,7 +1263,7 @@ class MainActivity : AppCompatActivity() {
                                 val isNew = lastSpokenDiagnostic != "USER_OK_QR_MISSING"
                                 val isNag = (now - lastDiagnosticSpokenTimestamp >= 30000L)
                                 if (isNew || isNag) {
-                                    speak("User verified, sir. Wall anchor occluded.")
+                                    speak("User OK. QR missing.")
                                     lastSpokenDiagnostic = "USER_OK_QR_MISSING"
                                     lastDiagnosticSpokenTimestamp = now
                                 }
@@ -1262,9 +1275,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     diagnosticDebounceState = ""
-                    if (isUserOnLegitimateAbsence) {
-                        lastSpokenDiagnostic = ""
-                    }
+                    if (isUserOnLegitimateAbsence) lastSpokenDiagnostic = ""
                 }
 
                 val personTag = if (isPersonCurrentlyPresent) "👤 User: ✓" else "👤 User: ✗"
@@ -1299,23 +1310,21 @@ class MainActivity : AppCompatActivity() {
 
                             if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                                 slotLaunchAnnounced[activeSlot] = true
-                                speak("Station secured, sir. Study Slot $activeSlot commencing. Focus engaged.")
+                                speak("Station locked. Slot $activeSlot started. Go!")
                             } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
                                 preSlotReadyAnnounced[preSlotNum] = true
-                                val bat = getBatteryPercentage()
-                                val batStr = if (bat > 0) "Battery at $bat percent." else "Power levels stable."
-                                speak("Station secured, sir. Optical systems ready. $batStr")
+                                speak("Station locked. Camera ready.")
                             } else if (currentAbsenceState == AbsenceState.BUFFER) {
                                 val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                                 val used = getBufferUsedCount(activeSlot)
                                 val left = (maxBuffers - used).coerceAtLeast(0)
-                                val leftStr = if (left == 1) "1 buffer remaining" else "$left buffers remaining"
-                                speak("Station secured, sir. Buffer concluded. $leftStr.")
+                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                                speak("Station locked. Buffer complete. $leftStr.")
                                 currentAbsenceState = AbsenceState.NONE
                             } else if (currentAbsenceState == AbsenceState.BREAK) {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                speak("Station secured, sir. Break paused. $mins minutes remaining in bank.")
+                                speak("Station locked. Break paused. $mins minutes left.")
                                 currentAbsenceState = AbsenceState.NONE
                             }
                         }
@@ -1331,13 +1340,13 @@ class MainActivity : AppCompatActivity() {
                                 incrementBufferUsedCount(activeSlot)
                                 currentBufferTripNum = usedBufferCount + 1
                                 val left = (maxBuffers - currentBufferTripNum).coerceAtLeast(0)
-                                val leftStr = if (left == 1) "1 buffer remaining" else "$left buffers remaining"
-                                speak("Buffer $currentBufferTripNum initiated, sir. $leftStr.")
+                                val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
+                                speak("Buffer $currentBufferTripNum started. $leftStr.")
                                 currentAbsenceState = AbsenceState.BUFFER
                             } else {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Break protocol active, sir. $mins minutes remaining.") else speak("Break bank critical, sir. Under one minute remaining.")
+                                if (mins >= 1) speak("Break started. $mins minutes left.") else speak("Break critical. Under one minute left.")
                                 currentAbsenceState = AbsenceState.BREAK
                             }
                             hasAnnouncedExitForCurrentAbsence = true
@@ -1349,8 +1358,8 @@ class MainActivity : AppCompatActivity() {
                                 currentAbsenceState = AbsenceState.BREAK
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) speak("Buffer expired, sir. Transitioning to break bank. $mins minutes remaining.")
-                                else speak("Buffer expired, sir. Break bank critical. Under one minute remaining.")
+                                if (mins >= 1) speak("Buffer expired. Break started. $mins minutes left.")
+                                else speak("Buffer expired. Under one minute left.")
                             }
                         }
 
@@ -1470,12 +1479,13 @@ class MainActivity : AppCompatActivity() {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
                     val isAnchorRequired = prefs.getBoolean("require_qr_anchor", true)
                     val isAnchorValid = if (!isAnchorRequired) true else ((System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS)
-                    val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
+                    val rawVerified = isPersonCurrentlyPresent && isAnchorValid
+                    val isFullyVerifiedAtDesk = rawVerified && (sustainedPresenceStartMs > 0L && (System.currentTimeMillis() - sustainedPresenceStartMs >= 1000L))
 
                     val bat = getBatteryPercentage()
                     if (bat in 1..20 && !hasAnnouncedLowBattery) {
                         hasAnnouncedLowBattery = true
-                        speak("Pardon the intrusion, sir. Battery low at $bat percent. Charger connection recommended.")
+                        speak("Battery low, $bat percent. Connect charger.")
                     } else if (bat > 25) {
                         hasAnnouncedLowBattery = false
                     }
