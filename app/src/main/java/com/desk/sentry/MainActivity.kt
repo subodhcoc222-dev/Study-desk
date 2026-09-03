@@ -71,10 +71,9 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    private var sustainedPresentFrameCount = 0
-    private var sustainedAbsentFrameCount = 0
-    private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 5
-    private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6
+    // Rock-Solid Presence Confidence Score
+    private var presenceConfidenceScore = 0
+    private val ANCHOR_OCCLUSION_TOLERANCE_MS = 8500L
 
     private var currentActiveSlot: Int = -1
     private var lastTrackedSlot: Int = -1
@@ -95,14 +94,10 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    // 5-Second False-Exit Debounce
     private val FALSE_EXIT_DEBOUNCE_MS = 5000L
-
-    // 45-Second Placement Grace Window
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
 
-    // Ultra-Fast Dedicated Beep Loop Variables
     private var currentBeepIntervalMs = 2000L
     private var currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
     private var currentBeepDurationMs = 70
@@ -112,7 +107,6 @@ class MainActivity : AppCompatActivity() {
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
     private var hasAnnouncedLowBattery = false
 
-    // UI Components
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
@@ -172,7 +166,6 @@ class MainActivity : AppCompatActivity() {
         isSentryArmed = prefs.getBoolean("sentry_armed", false)
 
         try {
-            // STREAM_ALARM with maximum 100% volume for dual-output punch
             toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -194,7 +187,6 @@ class MainActivity : AppCompatActivity() {
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
-        // Double-Confirmation PIN Setup on first launch
         if (!prefs.contains("user_pin")) {
             showFirstTimeSetPinDialog()
         }
@@ -210,10 +202,6 @@ class MainActivity : AppCompatActivity() {
         startDedicatedRadarBeepEngine()
     }
 
-    /**
-     * SHUTDOWN / BATTERY DRAIN RECOVERY ENGINE:
-     * Automatically logs any powered-off downtime during scheduled study slots as Absent.
-     */
     private fun checkAndProcessDeviceShutdownRecovery() {
         val lastBeat = prefs.getLong("last_heartbeat_timestamp", 0L)
         val now = System.currentTimeMillis()
@@ -280,7 +268,6 @@ class MainActivity : AppCompatActivity() {
                 tts?.setSpeechRate(0.85f)
                 tts?.setPitch(1.0f)
 
-                // DUAL ROUTING: USAGE_ALARM + FLAG_AUDIBILITY_ENFORCED
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -727,10 +714,6 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
-    /**
-     * DOUBLE-CONFIRMATION PIN SETUP:
-     * Two input fields (Create PIN + Confirm PIN) preventing mistyping.
-     */
     private fun showFirstTimeSetPinDialog() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -972,7 +955,9 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = if (isUsingBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
 
-                val poseOptions = PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build()
+                val poseOptions = PoseDetectorOptions.Builder()
+                    .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+                    .build()
                 val poseDetector = PoseDetection.getClient(poseOptions)
 
                 val barcodeOptions = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
@@ -1002,7 +987,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
-        val minConfidence = 0.35f
+        val minConfidence = 0.28f
+
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
@@ -1022,28 +1008,19 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasLeftShoulder && !hasRightShoulder) return false
 
-        if (hasLeftShoulder && hasRightShoulder) {
-            val shoulderSpan = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
-            if (shoulderSpan < imgWidth * 0.10f || shoulderSpan > imgWidth * 0.95f) return false
-        }
+        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.15f) ||
+                (leftEye != null && leftEye.inFrameLikelihood >= 0.15f) ||
+                (rightEye != null && rightEye.inFrameLikelihood >= 0.15f) ||
+                (leftEar != null && leftEar.inFrameLikelihood >= 0.15f) ||
+                (rightEar != null && rightEar.inFrameLikelihood >= 0.15f) ||
+                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.15f) ||
+                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.15f)
 
-        val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.18f) ||
-                (leftEye != null && leftEye.inFrameLikelihood >= 0.18f) ||
-                (rightEye != null && rightEye.inFrameLikelihood >= 0.18f) ||
-                (leftEar != null && leftEar.inFrameLikelihood >= 0.18f) ||
-                (rightEar != null && rightEar.inFrameLikelihood >= 0.18f) ||
-                (leftMouth != null && leftMouth.inFrameLikelihood >= 0.18f) ||
-                (rightMouth != null && rightMouth.inFrameLikelihood >= 0.18f)
+        val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.20f) ||
+                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.20f) ||
+                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.20f) ||
+                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.20f)
 
-        val hasWritingArms = (leftWrist != null && leftWrist.inFrameLikelihood >= 0.25f) ||
-                (rightWrist != null && rightWrist.inFrameLikelihood >= 0.25f) ||
-                (leftElbow != null && leftElbow.inFrameLikelihood >= 0.25f) ||
-                (rightElbow != null && rightElbow.inFrameLikelihood >= 0.25f)
-
-        val refY = if (hasLeftShoulder && hasRightShoulder) (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
-        else if (hasLeftShoulder) leftShoulder!!.position.y else rightShoulder!!.position.y
-
-        if (refY < imgHeight * 0.05f || refY > imgHeight * 0.98f) return false
         return hasHeadOrFace || hasWritingArms
     }
 
@@ -1054,42 +1031,49 @@ class MainActivity : AppCompatActivity() {
         barcodeScanner: com.google.mlkit.vision.barcode.BarcodeScanner
     ) {
         val mediaImage = imageProxy.image
-        if (mediaImage != null) {
-            val rotation = imageProxy.imageInfo.rotationDegrees
-            val isRotated = rotation == 90 || rotation == 270
-            val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
-            val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
-            val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
-
-            val poseTask = poseDetector.process(inputImage)
-                .addOnSuccessListener { pose ->
-                    val frameValid = isRealDeskUser(pose, effWidth, effHeight)
-                    if (frameValid) {
-                        sustainedPresentFrameCount++
-                        sustainedAbsentFrameCount = 0
-                        if (sustainedPresentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_PRESENT) isPersonCurrentlyPresent = true
-                    } else {
-                        sustainedAbsentFrameCount++
-                        sustainedPresentFrameCount = 0
-                        if (sustainedAbsentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_ABSENT) isPersonCurrentlyPresent = false
-                    }
-                }
-
-            val barcodeTask = barcodeScanner.process(inputImage)
-                .addOnSuccessListener { barcodes ->
-                    if (barcodes.isNotEmpty()) {
-                        lastAnchorSeenTimestamp = System.currentTimeMillis()
-                        isAnchorCurrentlyPresent = true
-                    } else {
-                        isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
-                    }
-                }
-
-            Tasks.whenAllComplete(poseTask, barcodeTask).addOnCompleteListener { imageProxy.close() }
-        } else {
+        if (mediaImage == null) {
             imageProxy.close()
+            return
         }
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val isRotated = rotation == 90 || rotation == 270
+        val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
+        val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
+        val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
+
+        val poseTask = poseDetector.process(inputImage)
+            .addOnSuccessListener { pose ->
+                val frameValid = isRealDeskUser(pose, effWidth, effHeight)
+                if (frameValid) {
+                    presenceConfidenceScore = (presenceConfidenceScore + 2).coerceAtMost(10)
+                } else {
+                    presenceConfidenceScore = (presenceConfidenceScore - 1).coerceAtLeast(0)
+                }
+                isPersonCurrentlyPresent = presenceConfidenceScore >= 4
+            }
+
+        val barcodeTask = barcodeScanner.process(inputImage)
+            .addOnSuccessListener { barcodes ->
+                if (barcodes.isNotEmpty()) {
+                    lastAnchorSeenTimestamp = System.currentTimeMillis()
+                    isAnchorCurrentlyPresent = true
+                } else {
+                    isAnchorCurrentlyPresent = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSTER_TOLERANCE_MS_RESOLVE()
+                }
+            }
+
+        Tasks.whenAllComplete(poseTask, barcodeTask)
+            .addOnCompleteListener {
+                try {
+                    imageProxy.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
     }
+
+    private fun ANCHOR_OCCLUSTER_TOLERANCE_MS_RESOLVE(): Long = ANCHOR_OCCLUSION_TOLERANCE_MS
 
     private fun startDedicatedRadarBeepEngine() {
         val radarHandler = Handler(Looper.getMainLooper())
@@ -1158,7 +1142,7 @@ class MainActivity : AppCompatActivity() {
                 updateBreakBankUI()
                 updateBufferLimitUI()
 
-                val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
+                val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
                 val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
                 if (isFullyVerifiedAtDesk) {
@@ -1364,7 +1348,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (isSentryArmed && !isArmingGraceActive && currentActiveSlot != -1) {
                     val remainingBank = getRemainingBreakAllowanceSec(currentActiveSlot)
-                    val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < 3500L
+                    val isAnchorValid = (System.currentTimeMillis() - lastAnchorSeenTimestamp) < ANCHOR_OCCLUSION_TOLERANCE_MS
                     val isFullyVerifiedAtDesk = isPersonCurrentlyPresent && isAnchorValid
 
                     val bat = getBatteryPercentage()
@@ -1496,10 +1480,6 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
-    /**
-     * DUAL-OUTPUT ALARM ROUTING:
-     * Plays through both internal phone speaker and 3.5mm connected speaker simultaneously.
-     */
     private fun initAlarmSound() {
         try {
             mediaPlayer?.release()
@@ -1510,7 +1490,7 @@ class MainActivity : AppCompatActivity() {
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED) // Dual hardware routing flag
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
 
             mediaPlayer = MediaPlayer().apply {
