@@ -51,8 +51,8 @@
                             android:id="@+id/tvLiveStatus"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="● INITIALIZING AI SENTRY..."
-                            android:textColor="#22C55E"
+                            android:text="● SENTRY STANDBY"
+                            android:textColor="#94A3B8"
                             android:textSize="12sp"
                             android:textStyle="bold" />
 
@@ -60,7 +60,7 @@
                             android:id="@+id/tvCountdown"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Desk Status: Initializing..."
+                            android:text="Desk Status: Ready for Activation"
                             android:textColor="#FFFFFF"
                             android:textSize="10sp" />
                     </LinearLayout>
@@ -121,7 +121,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- MASTER SWITCH CARD -->
+                <!-- UNIFIED ALL-IN-ONE MASTER CARD -->
                 <androidx.cardview.widget.CardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -142,21 +142,41 @@
                             android:orientation="horizontal"
                             android:gravity="center_vertical">
 
-                            <TextView
+                            <LinearLayout
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="🛡️ Desk Sentry AI Master"
-                                android:textColor="#F8FAFC"
-                                android:textSize="13sp"
-                                android:textStyle="bold" />
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="🛡️ Desk Sentry AI Master"
+                                    android:textColor="#F8FAFC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="All-in-One: 24/7 Guard + Lock + AI Sentry"
+                                    android:textColor="#38BDF8"
+                                    android:textSize="9sp" />
+                            </LinearLayout>
 
                             <com.google.android.material.switchmaterial.SwitchMaterial
                                 android:id="@+id/switchMasterSentry"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:checked="true" />
+                                android:checked="false" />
                         </LinearLayout>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="#334155"
+                            android:layout_marginTop="4dp"
+                            android:layout_marginBottom="4dp" />
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -168,7 +188,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="⚡ Override Mode (24/7 Force Active)"
+                                android:text="⚡ Override Mode (Force Active Now)"
                                 android:textColor="#94A3B8"
                                 android:textSize="11sp" />
 
@@ -177,28 +197,6 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:checked="false" />
-                        </LinearLayout>
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:gravity="center_vertical">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="🔄 24/7 Background Persistent Guard"
-                                android:textColor="#38BDF8"
-                                android:textSize="11sp"
-                                android:textStyle="bold" />
-
-                            <com.google.android.material.switchmaterial.SwitchMaterial
-                                android:id="@+id/switchBgGuard"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:checked="true" />
                         </LinearLayout>
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
@@ -222,7 +220,7 @@
                             android:id="@+id/tvBreakBankHeader"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="☕ Break Bank: Calculating..."
+                            android:text="☕ Break Bank: Standby"
                             android:textColor="#FFFFFF"
                             android:textSize="12sp"
                             android:textStyle="bold" />
