@@ -60,7 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = false
     private var isAlwaysActiveMode = false
-    private var absenceThresholdMs = 180000L // Default 3 mins buffer (Gold Standard)
+    private var absenceThresholdMs = 180000L
     private var lastSeenTimestamp = System.currentTimeMillis()
     private var isPersonCurrentlyPresent = false
     private var isAnchorCurrentlyPresent = false
@@ -71,28 +71,20 @@ class MainActivity : AppCompatActivity() {
     private var isUsingBackCamera = true
     private lateinit var audioManager: AudioManager
 
-    // Anti-Ghosting Frame Confirmation
     private var sustainedPresentFrameCount = 0
     private var sustainedAbsentFrameCount = 0
     private val REQUIRED_FRAMES_TO_CONFIRM_PRESENT = 5
     private val REQUIRED_FRAMES_TO_CONFIRM_ABSENT = 6
 
-    // Real-Time Analytics State
     private var currentActiveSlot: Int = -1
     private var lastTrackedSlot: Int = -1
     private var alarmTriggerStartMs: Long = 0L
     private var isAlarmCurrentlyTracking: Boolean = false
 
-    // 2-Stage Auto Break Bank Tracking
     private var isCurrentlyTakingAutoBreak: Boolean = false
     private var autoBreakStartMs: Long = 0L
-
-    // Rear Camera Alignment Confirmation
     private var wasStationAlignedLastTick = false
 
-    // -------------------------------------------------------------
-    // ADVANCED AI SPEECH, DEBOUNCE & ULTRA-FAST RADAR ENGINE
-    // -------------------------------------------------------------
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
     private var isTtsSpeaking = false
@@ -103,14 +95,12 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    // 8-Second Debounce for Fallen Pen / Stretching
-    private val FALSE_EXIT_DEBOUNCE_MS = 8000L
+    // 5-Second False-Exit Debounce
+    private val FALSE_EXIT_DEBOUNCE_MS = 5000L
 
-    // 45-Second Setup Window on Arming
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
 
-    // Ultra-Fast Dedicated Beep Loop Variables
     private var currentBeepIntervalMs = 2000L
     private var currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
     private var currentBeepDurationMs = 70
@@ -120,7 +110,6 @@ class MainActivity : AppCompatActivity() {
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
     private var hasAnnouncedLowBattery = false
 
-    // UI Components
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
@@ -157,12 +146,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    data class SlotViewHolder(
-        val checkBox: CheckBox,
-        val textView: TextView,
-        val setButton: Button,
-        val slotNum: Int
-    )
+    data class SlotViewHolder(val checkBox: CheckBox, val textView: TextView, val setButton: Button, val slotNum: Int)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,11 +166,9 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
         isSentryArmed = prefs.getBoolean("sentry_armed", false)
 
         try {
-            // Volume set to 100% MAXIMUM for true high-urgency tone
             toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -194,6 +176,7 @@ class MainActivity : AppCompatActivity() {
 
         initTTS()
         checkAllPermissions()
+        checkAndProcessDeviceShutdownRecovery()
 
         if (isSentryArmed) {
             startPersistentBackgroundService()
@@ -207,6 +190,7 @@ class MainActivity : AppCompatActivity() {
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
+        // Double-Verification First-Time PIN Setup
         if (!prefs.contains("user_pin")) {
             showFirstTimeSetPinDialog()
         }
@@ -219,7 +203,62 @@ class MainActivity : AppCompatActivity() {
 
         startMonitoringLoop()
         startPeriodicTimeTracker()
-        startDedicatedRadarBeepEngine() // Independent High-Speed Beep Engine
+        startDedicatedRadarBeepEngine()
+    }
+
+    private fun checkAndProcessDeviceShutdownRecovery() {
+        val lastBeat = prefs.getLong("last_heartbeat_timestamp", 0L)
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong("last_heartbeat_timestamp", now).apply()
+
+        if (lastBeat == 0L) return
+
+        val downtimeMs = now - lastBeat
+        if (downtimeMs > 40000L) {
+            processDowntimeAbsence(lastBeat, now)
+        }
+    }
+
+    private fun processDowntimeAbsence(offStartMs: Long, offEndMs: Long) {
+        val calStart = Calendar.getInstance().apply { timeInMillis = offStartMs }
+        val dayOfWeek = calStart.get(Calendar.DAY_OF_WEEK)
+
+        for (i in 1..5) {
+            val isEnabled = prefs.getBoolean("slot_${i}_enabled", i <= 2)
+            val isDayActive = prefs.getBoolean("slot_${i}_day_$dayOfWeek", dayOfWeek != Calendar.SUNDAY)
+
+            if (isEnabled && isDayActive) {
+                val def = getDefaultSlotTimes(i)
+                val sH = prefs.getInt("slot_${i}_start_h", def.startH)
+                val sM = prefs.getInt("slot_${i}_start_m", def.startM)
+                val eH = prefs.getInt("slot_${i}_end_h", def.endH)
+                val eM = prefs.getInt("slot_${i}_end_m", def.endM)
+
+                val slotStartCal = Calendar.getInstance().apply {
+                    timeInMillis = offStartMs
+                    set(Calendar.HOUR_OF_DAY, sH)
+                    set(Calendar.MINUTE, sM)
+                    set(Calendar.SECOND, 0)
+                }
+
+                val slotEndCal = Calendar.getInstance().apply {
+                    timeInMillis = offStartMs
+                    set(Calendar.HOUR_OF_DAY, eH)
+                    set(Calendar.MINUTE, eM)
+                    set(Calendar.SECOND, 0)
+                }
+
+                val overlapStart = maxOf(offStartMs, slotStartCal.timeInMillis)
+                val overlapEnd = minOf(offEndMs, slotEndCal.timeInMillis)
+
+                if (overlapEnd > overlapStart) {
+                    val absentSec = (overlapEnd - overlapStart) / 1000L
+                    if (absentSec >= 15L) {
+                        recordAbsentInterval(i, overlapStart, overlapEnd, absentSec, "Device Powered Off / Drained")
+                    }
+                }
+            }
+        }
     }
 
     private fun initTTS() {
@@ -242,15 +281,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                isTtsSpeaking = true
-            }
-            override fun onDone(utteranceId: String?) {
-                isTtsSpeaking = false
-            }
-            override fun onError(utteranceId: String?) {
-                isTtsSpeaking = false
-            }
+            override fun onStart(utteranceId: String?) { isTtsSpeaking = true }
+            override fun onDone(utteranceId: String?) { isTtsSpeaking = false }
+            override fun onError(utteranceId: String?) { isTtsSpeaking = false }
         })
     }
 
@@ -266,9 +299,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
             bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        } catch (e: Exception) {
-            -1
-        }
+        } catch (e: Exception) { -1 }
     }
 
     private fun checkAllPermissions() {
@@ -278,8 +309,7 @@ class MainActivity : AppCompatActivity() {
                 .setMessage("To permanently lock Desk Sentry on screen and block power off, please turn ON 'Desk Sentry' in Accessibility Settings.")
                 .setCancelable(false)
                 .setPositiveButton("Open Settings") { _, _ ->
-                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                    startActivity(intent)
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
                 .show()
         }
@@ -287,59 +317,31 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 try {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } catch (e: Exception) { e.printStackTrace() }
             }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                    startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = ComponentName(this, SentryAccessibilityService::class.java)
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabledServices.contains(expectedComponentName.flattenToString()) ||
-               enabledServices.contains(expectedComponentName.flattenToShortString()) ||
-               enabledServices.contains(SentryAccessibilityService::class.java.simpleName)
+        val expected = ComponentName(this, SentryAccessibilityService::class.java)
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return enabled.contains(expected.flattenToString()) || enabled.contains(expected.flattenToShortString()) || enabled.contains(SentryAccessibilityService::class.java.simpleName)
     }
 
     private fun startPersistentBackgroundService() {
-        val serviceIntent = Intent(this, SentryService::class.java).apply {
-            action = SentryService.ACTION_START
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(this, serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        val intent = Intent(this, SentryService::class.java).apply { action = SentryService.ACTION_START }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ContextCompat.startForegroundService(this, intent) else startService(intent)
     }
 
     private fun stopPersistentBackgroundService() {
-        val serviceIntent = Intent(this, SentryService::class.java).apply {
-            action = SentryService.ACTION_STOP
-        }
-        startService(serviceIntent)
+        startService(Intent(this, SentryService::class.java).apply { action = SentryService.ACTION_STOP })
     }
 
     override fun onResume() {
@@ -361,9 +363,7 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (!isSentryArmed) {
-            super.onBackPressed()
-        }
+        if (!isSentryArmed) super.onBackPressed()
     }
 
     private fun initViews() {
@@ -403,15 +403,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         switchMasterSentry.setOnClickListener {
-            val targetState = switchMasterSentry.isChecked
-            switchMasterSentry.isChecked = !targetState
+            val target = switchMasterSentry.isChecked
+            switchMasterSentry.isChecked = !target
 
-            if (targetState) {
+            if (target) {
                 switchMasterSentry.isChecked = true
                 isSentryArmed = true
                 prefs.edit().putBoolean("sentry_armed", true).apply()
                 startPersistentBackgroundService()
-
                 isArmingGraceActive = true
                 armingGraceRemainingSec = 45
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
@@ -430,12 +429,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchAlwaysActive.setOnClickListener {
-            val targetState = switchAlwaysActive.isChecked
-            switchAlwaysActive.isChecked = !targetState
+            val target = switchAlwaysActive.isChecked
+            switchAlwaysActive.isChecked = !target
             requirePinVerification("Toggle Override Mode") {
-                switchAlwaysActive.isChecked = targetState
-                isAlwaysActiveMode = targetState
-                prefs.edit().putBoolean("always_active_mode", targetState).apply()
+                switchAlwaysActive.isChecked = target
+                isAlwaysActiveMode = target
+                prefs.edit().putBoolean("always_active_mode", target).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
             }
         }
@@ -457,12 +456,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         stealthOverlay.setOnClickListener {
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastTapTime < 500) {
+            val cur = System.currentTimeMillis()
+            if (cur - lastTapTime < 500) {
                 stealthOverlay.visibility = View.GONE
                 dashboardLayout.visibility = View.VISIBLE
             }
-            lastTapTime = currentTime
+            lastTapTime = cur
         }
 
         for (i in 0 until rgGracePeriod.childCount) {
@@ -473,7 +472,6 @@ class MainActivity : AppCompatActivity() {
                         R.id.rb10s -> 10000L
                         R.id.rb1m -> 60000L
                         R.id.rb2m -> 120000L
-                        R.id.rb3m -> 180000L
                         else -> 180000L
                     }
                     rgGracePeriod.check(rb.id)
@@ -482,16 +480,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnSetBufferLimit.setOnClickListener {
-            requirePinVerification("Change Free Buffer Usage Limit") {
-                showSetBufferLimitDialog()
-            }
+            requirePinVerification("Change Free Buffer Usage Limit") { showSetBufferLimitDialog() }
         }
 
         for (holder in slotViews) {
             holder.setButton.setOnClickListener {
-                requirePinVerification("Edit Slot ${holder.slotNum} Schedule") {
-                    showComprehensiveSlotDialog(holder.slotNum)
-                }
+                requirePinVerification("Edit Slot ${holder.slotNum} Schedule") { showComprehensiveSlotDialog(holder.slotNum) }
             }
             holder.checkBox.setOnClickListener {
                 val target = holder.checkBox.isChecked
@@ -503,21 +497,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        btnActivateAdmin.setOnClickListener {
-            requirePinVerification("Enable Device Admin Protection") {
-                requestDeviceAdmin()
-            }
-        }
-
-        btnChangePin.setOnClickListener {
-            showChangePinTwoStepWorkflow()
-        }
-
-        btnChangeAlarmTone.setOnClickListener {
-            requirePinVerification("Select Alarm Sound") {
-                openRingtonePicker()
-            }
-        }
+        btnActivateAdmin.setOnClickListener { requirePinVerification("Enable Admin Protection") { requestDeviceAdmin() } }
+        btnChangePin.setOnClickListener { showChangePinTwoStepWorkflow() }
+        btnChangeAlarmTone.setOnClickListener { requirePinVerification("Select Alarm Sound") { openRingtonePicker() } }
 
         btnTestAlarm.setOnClickListener {
             if (mediaPlayer?.isPlaying == true) {
@@ -536,27 +518,21 @@ class MainActivity : AppCompatActivity() {
             putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Irritating Alarm Tone")
             putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
             putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-            val currentUriStr = prefs.getString("custom_alarm_uri", null)
-            if (currentUriStr != null) {
-                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(currentUriStr))
-            }
+            val currentUri = prefs.getString("custom_alarm_uri", null)
+            if (currentUri != null) putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(currentUri))
         }
         ringtonePickerLauncher.launch(intent)
     }
 
     private fun getBufferUsedCount(slotNum: Int): Int {
         if (slotNum == -1) return 0
-        val dateKey = getTodayDateKey()
-        val key = "quick_buffer_used_${dateKey}_slot_$slotNum"
-        return prefs.getInt(key, 0)
+        return prefs.getInt("quick_buffer_used_${getTodayDateKey()}_slot_$slotNum", 0)
     }
 
     private fun incrementBufferUsedCount(slotNum: Int) {
         if (slotNum == -1) return
-        val dateKey = getTodayDateKey()
-        val key = "quick_buffer_used_${dateKey}_slot_$slotNum"
-        val current = prefs.getInt(key, 0)
-        prefs.edit().putInt(key, current + 1).apply()
+        val key = "quick_buffer_used_${getTodayDateKey()}_slot_$slotNum"
+        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).apply()
         updateBufferLimitUI()
     }
 
@@ -565,7 +541,6 @@ class MainActivity : AppCompatActivity() {
         val slotNum = if (currentActiveSlot != -1) currentActiveSlot else 1
         val used = getBufferUsedCount(slotNum)
         val left = (maxLimit - used).coerceAtLeast(0)
-
         tvBufferLimitTitle.text = "🎯 Buffer Limit: $maxLimit Uses / Slot"
         tvBufferRemainingLive.text = "Slot $slotNum: $used Used • $left Left"
     }
@@ -580,10 +555,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(android.R.drawable.edit_text)
             setPadding(30, 20, 30, 20)
         }
-        val container = LinearLayout(this).apply {
-            setPadding(50, 30, 50, 10)
-            addView(input)
-        }
+        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
 
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🎯 Set Quick Buffer Limit Per Slot")
@@ -608,48 +580,25 @@ class MainActivity : AppCompatActivity() {
         val currentBreakMins = prefs.getInt("slot_${slotNumber}_break_bank_mins", def.defaultBreakMins)
 
         val dayNames = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        val dayCalendarConsts = intArrayOf(
-            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
-            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
-        )
-
-        val selectedDays = BooleanArray(7) { idx ->
-            val calConst = dayCalendarConsts[idx]
-            prefs.getBoolean("slot_${slotNumber}_day_$calConst", calConst != Calendar.SUNDAY)
-        }
+        val dayConsts = intArrayOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY)
+        val selectedDays = BooleanArray(7) { idx -> prefs.getBoolean("slot_${slotNumber}_day_${dayConsts[idx]}", dayConsts[idx] != Calendar.SUNDAY) }
 
         val scrollView = ScrollView(this).apply { isFillViewport = true }
-        val dialogView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 16, 30, 16)
-        }
-
-        val timeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 8)
-        }
+        val dialogView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(30, 16, 30, 16) }
+        val timeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, 8) }
 
         val btnStartTime = Button(this).apply {
             text = "Start: ${formatTime(startH, startM)}"
             textSize = 12f
             setOnClickListener {
-                TimePickerDialog(context, { _, h, m ->
-                    startH = h
-                    startM = m
-                    text = "Start: ${formatTime(startH, startM)}"
-                }, startH, startM, false).show()
+                TimePickerDialog(context, { _, h, m -> startH = h; startM = m; text = "Start: ${formatTime(startH, startM)}" }, startH, startM, false).show()
             }
         }
-
         val btnEndTime = Button(this).apply {
             text = "End: ${formatTime(endH, endM)}"
             textSize = 12f
             setOnClickListener {
-                TimePickerDialog(context, { _, h, m ->
-                    endH = h
-                    endM = m
-                    text = "End: ${formatTime(endH, endM)}"
-                }, endH, endM, false).show()
+                TimePickerDialog(context, { _, h, m -> endH = h; endM = m; text = "End: ${formatTime(endH, endM)}" }, endH, endM, false).show()
             }
         }
 
@@ -657,59 +606,22 @@ class MainActivity : AppCompatActivity() {
         timeRow.addView(btnEndTime, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         dialogView.addView(timeRow)
 
-        val breakRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 4, 0, 8)
-        }
-
-        val tvBreakLabel = TextView(this).apply {
-            text = "Slot Break Bank (Mins):"
-            textSize = 12f
-            setTextColor(Color.DKGRAY)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
-        }
-
-        val etBreakMins = EditText(this).apply {
-            hint = "30"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(currentBreakMins.toString())
-            setTextColor(Color.BLACK)
-            setBackgroundResource(android.R.drawable.edit_text)
-            setPadding(16, 10, 16, 10)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f)
-        }
+        val breakRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 4, 0, 8) }
+        val tvBreakLabel = TextView(this).apply { text = "Slot Break Bank (Mins):"; textSize = 12f; setTextColor(Color.DKGRAY); layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f) }
+        val etBreakMins = EditText(this).apply { hint = "30"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; setText(currentBreakMins.toString()); setTextColor(Color.BLACK); setBackgroundResource(android.R.drawable.edit_text); setPadding(16, 10, 16, 10); layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f) }
 
         breakRow.addView(tvBreakLabel)
         breakRow.addView(etBreakMins)
         dialogView.addView(breakRow)
 
-        val tvDaysHeader = TextView(this).apply {
-            text = "Active Days for Slot $slotNumber:"
-            textSize = 12f
-            setTextColor(Color.DKGRAY)
-            setPadding(0, 4, 0, 4)
-        }
-        dialogView.addView(tvDaysHeader)
-
-        val daysRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
+        val daysRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val checkBoxes = ArrayList<CheckBox>()
         for (i in 0..6) {
-            val cb = CheckBox(this).apply {
-                text = dayNames[i]
-                isChecked = selectedDays[i]
-                textSize = 10f
-                setPadding(2, 0, 4, 0)
-            }
+            val cb = CheckBox(this).apply { text = dayNames[i]; isChecked = selectedDays[i]; textSize = 10f; setPadding(2, 0, 4, 0) }
             checkBoxes.add(cb)
             daysRow.addView(cb, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
         dialogView.addView(daysRow)
-
         scrollView.addView(dialogView)
 
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
@@ -722,14 +634,13 @@ class MainActivity : AppCompatActivity() {
                 editor.putInt("slot_${slotNumber}_end_h", endH)
                 editor.putInt("slot_${slotNumber}_end_m", endM)
                 editor.putBoolean("slot_${slotNumber}_enabled", true)
-
                 val parsedMins = etBreakMins.text.toString().trim().toIntOrNull() ?: currentBreakMins
                 editor.putInt("slot_${slotNumber}_break_bank_mins", parsedMins.coerceAtLeast(0))
 
                 var activeDayCount = 0
                 for (i in 0..6) {
                     val isChecked = checkBoxes[i].isChecked
-                    editor.putBoolean("slot_${slotNumber}_day_${dayCalendarConsts[i]}", isChecked)
+                    editor.putBoolean("slot_${slotNumber}_day_${dayConsts[i]}", isChecked)
                     if (isChecked) activeDayCount++
                 }
                 editor.putString("slot_${slotNumber}_days", if (activeDayCount == 7) "All Days" else "$activeDayCount Days")
@@ -742,13 +653,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    data class SlotTimeConfig(
-        val startH: Int,
-        val startM: Int,
-        val endH: Int,
-        val endM: Int,
-        val defaultBreakMins: Int
-    )
+    data class SlotTimeConfig(val startH: Int, val startM: Int, val endH: Int, val endM: Int, val defaultBreakMins: Int)
 
     private fun getDefaultSlotTimes(slotNum: Int): SlotTimeConfig {
         return when (slotNum) {
@@ -762,8 +667,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun getRemainingBreakAllowanceSec(slotNum: Int): Long {
         if (slotNum == -1) return 1800L
-        val dateKey = getTodayDateKey()
-        val key = "break_bank_${dateKey}_slot_$slotNum"
+        val key = "break_bank_${getTodayDateKey()}_slot_$slotNum"
         val def = getDefaultSlotTimes(slotNum)
         val configuredMins = prefs.getInt("slot_${slotNum}_break_bank_mins", def.defaultBreakMins)
         return prefs.getLong(key, configuredMins * 60L)
@@ -771,9 +675,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setRemainingBreakAllowanceSec(slotNum: Int, sec: Long) {
         if (slotNum == -1) return
-        val dateKey = getTodayDateKey()
-        val key = "break_bank_${dateKey}_slot_$slotNum"
-        prefs.edit().putLong(key, sec.coerceAtLeast(0L)).apply()
+        prefs.edit().putLong("break_bank_${getTodayDateKey()}_slot_$slotNum", sec.coerceAtLeast(0L)).apply()
     }
 
     private fun updateBreakBankUI() {
@@ -792,11 +694,8 @@ class MainActivity : AppCompatActivity() {
         val json = getDayJson(dateKey)
         val slots = json.optJSONObject("slots") ?: JSONObject()
         val slotObj = slots.optJSONObject(slotNum.toString()) ?: JSONObject().apply {
-            put("presentSec", 0L)
-            put("absentSec", 0L)
-            put("officialBreakSec", 0L)
-            put("absences", JSONArray())
-            put("breaks", JSONArray())
+            put("presentSec", 0L); put("absentSec", 0L); put("officialBreakSec", 0L)
+            put("absences", JSONArray()); put("breaks", JSONArray())
         }
 
         val curBreakSec = slotObj.optLong("officialBreakSec", 0L)
@@ -808,7 +707,6 @@ class MainActivity : AppCompatActivity() {
             put("end", timeFormat.format(Date(endMs)))
             put("durationSec", durationSec)
         }
-
         val breaksArray = slotObj.optJSONArray("breaks") ?: JSONArray()
         breaksArray.put(item)
         slotObj.put("breaks", breaksArray)
@@ -818,18 +716,41 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
+    /**
+     * DOUBLE-VERIFICATION FIRST-TIME PIN SETUP:
+     * Contains two input fields: Create PIN + Confirm PIN.
+     */
     private fun showFirstTimeSetPinDialog() {
-        val input = EditText(this).apply {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 20, 50, 10)
+        }
+
+        val inputPin = EditText(this).apply {
             hint = "Create 4-digit Master PIN"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setTextColor(Color.BLACK)
             setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 24, 30, 24)
         }
-        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(input) }
+
+        val inputConfirm = EditText(this).apply {
+            hint = "Confirm Master PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 24, 30, 24)
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.topMargin = 20
+            layoutParams = params
+        }
+
+        container.addView(inputPin)
+        container.addView(inputConfirm)
 
         val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Set Master Security PIN")
-            .setMessage("Welcome to Desk Sentry! Please create your master PIN.")
+            .setMessage("Welcome to Desk Sentry! Create your 4-digit PIN and confirm it below:")
             .setView(container)
             .setCancelable(false)
             .setPositiveButton("Save PIN", null)
@@ -837,13 +758,21 @@ class MainActivity : AppCompatActivity() {
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val pin = input.text.toString().trim()
-                if (pin.length >= 4) {
-                    prefs.edit().putString("user_pin", pin).apply()
-                    Toast.makeText(this, "Master PIN Saved!", Toast.LENGTH_SHORT).show()
-                    dialog.dismiss()
-                } else {
-                    Toast.makeText(this, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
+                val pin = inputPin.text.toString().trim()
+                val confirm = inputConfirm.text.toString().trim()
+
+                when {
+                    pin.length < 4 -> {
+                        Toast.makeText(this, "PIN must be at least 4 digits!", Toast.LENGTH_SHORT).show()
+                    }
+                    pin != confirm -> {
+                        Toast.makeText(this, "PINs do not match! Please re-enter.", Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {
+                        prefs.edit().putString("user_pin", pin).apply()
+                        Toast.makeText(this, "Master PIN Saved Successfully!", Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                    }
                 }
             }
         }
@@ -865,16 +794,15 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Enter Master PIN to $actionDescription:")
             .setView(container)
             .setPositiveButton("Authorize") { _, _ ->
-                if (input.text.toString().trim() == savedPin) {
-                    onVerified()
-                } else {
-                    Toast.makeText(this, "Incorrect PIN!", Toast.LENGTH_SHORT).show()
-                }
+                if (input.text.toString().trim() == savedPin) onVerified() else Toast.makeText(this, "Incorrect PIN!", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
+    /**
+     * STEP 1/2: ENTER CURRENT PIN
+     */
     private fun showChangePinTwoStepWorkflow() {
         val savedPin = prefs.getString("user_pin", "1234") ?: "1234"
         val inputOld = EditText(this).apply {
@@ -882,48 +810,81 @@ class MainActivity : AppCompatActivity() {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setTextColor(Color.BLACK)
             setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 24, 30, 24)
         }
         val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputOld) }
 
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Change Master PIN - Step 1/2")
-            .setMessage("Enter current master PIN:")
+            .setMessage("Enter your CURRENT master PIN:")
             .setView(container)
             .setPositiveButton("Next") { _, _ ->
-                if (inputOld.text.toString().trim() == savedPin) {
-                    showNewPinPrompt()
-                } else {
-                    Toast.makeText(this, "Incorrect Current PIN!", Toast.LENGTH_SHORT).show()
-                }
+                if (inputOld.text.toString().trim() == savedPin) showNewPinPrompt() else Toast.makeText(this, "Incorrect Current PIN!", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
+    /**
+     * STEP 2/2: DOUBLE-VERIFICATION FOR NEW PIN (New PIN + Confirm New PIN)
+     */
     private fun showNewPinPrompt() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 20, 50, 10)
+        }
+
         val inputNew = EditText(this).apply {
             hint = "New 4-digit PIN"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setTextColor(Color.BLACK)
             setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 24, 30, 24)
         }
-        val container = LinearLayout(this).apply { setPadding(50, 30, 50, 10); addView(inputNew) }
 
-        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+        val inputConfirm = EditText(this).apply {
+            hint = "Confirm New PIN"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setTextColor(Color.BLACK)
+            setBackgroundResource(android.R.drawable.edit_text)
+            setPadding(30, 24, 30, 24)
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.topMargin = 20
+            layoutParams = params
+        }
+
+        container.addView(inputNew)
+        container.addView(inputConfirm)
+
+        val dialog = AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
             .setTitle("🔑 Change Master PIN - Step 2/2")
-            .setMessage("Enter your new master PIN:")
+            .setMessage("Enter your new PIN and confirm it below:")
             .setView(container)
-            .setPositiveButton("Update PIN") { _, _ ->
+            .setPositiveButton("Update PIN", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val newPin = inputNew.text.toString().trim()
-                if (newPin.length >= 4) {
-                    prefs.edit().putString("user_pin", newPin).apply()
-                    Toast.makeText(this, "Master PIN updated!", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "PIN must be at least 4 digits!", Toast.LENGTH_SHORT).show()
+                val confirmPin = inputConfirm.text.toString().trim()
+
+                when {
+                    newPin.length < 4 -> {
+                        Toast.makeText(this, "PIN must be at least 4 digits!", Toast.LENGTH_SHORT).show()
+                    }
+                    newPin != confirmPin -> {
+                        Toast.makeText(this, "New PINs do not match! Try again.", Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {
+                        prefs.edit().putString("user_pin", newPin).apply()
+                        Toast.makeText(this, "Master PIN updated successfully!", Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                    }
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dialog.show()
     }
 
     private fun loadAllSlots() {
@@ -969,9 +930,7 @@ class MainActivity : AppCompatActivity() {
                     val start = prefs.getInt("slot_${i}_start_h", def.startH) * 60 + prefs.getInt("slot_${i}_start_m", def.startM)
                     val end = prefs.getInt("slot_${i}_end_h", def.endH) * 60 + prefs.getInt("slot_${i}_end_m", def.endM)
 
-                    if (currentMinutes in start until end) {
-                        return i
-                    }
+                    if (currentMinutes in start until end) return i
                 }
             }
         }
@@ -994,9 +953,7 @@ class MainActivity : AppCompatActivity() {
                     val def = getDefaultSlotTimes(i)
                     val start = prefs.getInt("slot_${i}_start_h", def.startH) * 60 + prefs.getInt("slot_${i}_start_m", def.startM)
                     val diff = start - currentMinutes
-                    if (diff in 1..10) {
-                        return Pair(true, i)
-                    }
+                    if (diff in 1..10) return Pair(true, i)
                 }
             }
         }
@@ -1013,9 +970,7 @@ class MainActivity : AppCompatActivity() {
                 val poseOptions = PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build()
                 val poseDetector = PoseDetection.getClient(poseOptions)
 
-                val barcodeOptions = BarcodeScannerOptions.Builder()
-                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                    .build()
+                val barcodeOptions = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                 val barcodeScanner = BarcodeScanning.getClient(barcodeOptions)
 
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
@@ -1033,23 +988,16 @@ class MainActivity : AppCompatActivity() {
 
                 try {
                     val range = camera?.cameraInfo?.exposureState?.exposureCompensationRange
-                    if (range != null && range.upper > 0) {
-                        camera.cameraControl.setExposureCompensationIndex(range.upper.coerceAtMost(2))
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                    if (range != null && range.upper > 0) camera.cameraControl.setExposureCompensationIndex(range.upper.coerceAtMost(2))
+                } catch (e: Exception) { e.printStackTrace() }
 
                 btnFlipCamera.text = if (isUsingBackCamera) "📷 Rear" else "📷 Front"
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
         val minConfidence = 0.35f
-
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
         val nose = pose.getPoseLandmark(PoseLandmark.NOSE)
@@ -1071,9 +1019,7 @@ class MainActivity : AppCompatActivity() {
 
         if (hasLeftShoulder && hasRightShoulder) {
             val shoulderSpan = abs(leftShoulder!!.position.x - rightShoulder!!.position.x)
-            if (shoulderSpan < imgWidth * 0.10f || shoulderSpan > imgWidth * 0.95f) {
-                return false
-            }
+            if (shoulderSpan < imgWidth * 0.10f || shoulderSpan > imgWidth * 0.95f) return false
         }
 
         val hasHeadOrFace = (nose != null && nose.inFrameLikelihood >= 0.18f) ||
@@ -1089,18 +1035,10 @@ class MainActivity : AppCompatActivity() {
                 (leftElbow != null && leftElbow.inFrameLikelihood >= 0.25f) ||
                 (rightElbow != null && rightElbow.inFrameLikelihood >= 0.25f)
 
-        val refY = if (hasLeftShoulder && hasRightShoulder) {
-            (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
-        } else if (hasLeftShoulder) {
-            leftShoulder!!.position.y
-        } else {
-            rightShoulder!!.position.y
-        }
+        val refY = if (hasLeftShoulder && hasRightShoulder) (leftShoulder!!.position.y + rightShoulder!!.position.y) / 2f
+        else if (hasLeftShoulder) leftShoulder!!.position.y else rightShoulder!!.position.y
 
-        if (refY < imgHeight * 0.05f || refY > imgHeight * 0.98f) {
-            return false
-        }
-
+        if (refY < imgHeight * 0.05f || refY > imgHeight * 0.98f) return false
         return hasHeadOrFace || hasWritingArms
     }
 
@@ -1116,7 +1054,6 @@ class MainActivity : AppCompatActivity() {
             val isRotated = rotation == 90 || rotation == 270
             val effWidth = (if (isRotated) mediaImage.height else mediaImage.width).toFloat()
             val effHeight = (if (isRotated) mediaImage.width else mediaImage.height).toFloat()
-
             val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
 
             val poseTask = poseDetector.process(inputImage)
@@ -1125,15 +1062,11 @@ class MainActivity : AppCompatActivity() {
                     if (frameValid) {
                         sustainedPresentFrameCount++
                         sustainedAbsentFrameCount = 0
-                        if (sustainedPresentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_PRESENT) {
-                            isPersonCurrentlyPresent = true
-                        }
+                        if (sustainedPresentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_PRESENT) isPersonCurrentlyPresent = true
                     } else {
                         sustainedAbsentFrameCount++
                         sustainedPresentFrameCount = 0
-                        if (sustainedAbsentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_ABSENT) {
-                            isPersonCurrentlyPresent = false
-                        }
+                        if (sustainedAbsentFrameCount >= REQUIRED_FRAMES_TO_CONFIRM_ABSENT) isPersonCurrentlyPresent = false
                     }
                 }
 
@@ -1147,19 +1080,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-            Tasks.whenAllComplete(poseTask, barcodeTask)
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+            Tasks.whenAllComplete(poseTask, barcodeTask).addOnCompleteListener { imageProxy.close() }
         } else {
             imageProxy.close()
         }
     }
 
-    /**
-     * DEDICATED INDEPENDENT AUDIO RADAR ENGINE
-     * Bypasses UI loop throttles to achieve intense 150ms panic pulses.
-     */
     private fun startDedicatedRadarBeepEngine() {
         val radarHandler = Handler(Looper.getMainLooper())
         radarHandler.post(object : Runnable {
@@ -1167,9 +1093,7 @@ class MainActivity : AppCompatActivity() {
                 if (isAudioRadarActive && mediaPlayer?.isPlaying != true && !isTtsSpeaking && toneGenerator != null) {
                     try {
                         toneGenerator?.startTone(currentBeepTone, currentBeepDurationMs)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                     radarHandler.postDelayed(this, currentBeepIntervalMs)
                 } else {
                     radarHandler.postDelayed(this, 200)
@@ -1178,40 +1102,36 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    /**
-     * ULTRA-INTENSE RADAR BEEP CALCULATOR
-     * Red Zone fires at 150ms with sharp TONE_PROP_BEEP (~7 beeps per second!)
-     */
     data class BeepProfile(val intervalMs: Long, val tone: Int, val durationMs: Int)
 
     private fun calculateUrgentRadarProfile(isBreak: Boolean, remainingSec: Long, totalSec: Long): BeepProfile {
         return if (isBreak) {
             when {
-                remainingSec > 120L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70) // Green: Calm 2.0s
-                remainingSec in 31L..120L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80) // Yellow: Alert 0.7s
-                else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC: 150ms rapid pulse!
+                remainingSec > 120L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70)
+                remainingSec in 31L..120L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80)
+                else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60)
             }
         } else {
             when {
-                totalSec <= 15L -> { // 10s test buffer
+                totalSec <= 15L -> {
                     when {
                         remainingSec > 4L -> BeepProfile(1500L, ToneGenerator.TONE_PROP_BEEP2, 70)
                         remainingSec in 2L..4L -> BeepProfile(600L, ToneGenerator.TONE_PROP_BEEP, 70)
-                        else -> BeepProfile(140L, ToneGenerator.TONE_PROP_BEEP, 50) // RED PANIC
+                        else -> BeepProfile(140L, ToneGenerator.TONE_PROP_BEEP, 50)
                     }
                 }
-                totalSec <= 65L -> { // 1m buffer
+                totalSec <= 65L -> {
                     when {
                         remainingSec > 25L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70)
                         remainingSec in 10L..25L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80)
-                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC
+                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60)
                     }
                 }
-                else -> { // 2m or 3m Gold Standard buffer
+                else -> {
                     when {
-                        remainingSec > 60L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70) // Green: Calm 2.0s
-                        remainingSec in 20L..60L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80) // Yellow: Alert 0.7s
-                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60) // RED PANIC: Rapid 150ms!
+                        remainingSec > 60L -> BeepProfile(2000L, ToneGenerator.TONE_PROP_BEEP2, 70)
+                        remainingSec in 20L..60L -> BeepProfile(700L, ToneGenerator.TONE_PROP_BEEP, 80)
+                        else -> BeepProfile(150L, ToneGenerator.TONE_PROP_BEEP, 60)
                     }
                 }
             }
@@ -1238,14 +1158,9 @@ class MainActivity : AppCompatActivity() {
 
                 if (isFullyVerifiedAtDesk) {
                     lastSeenTimestamp = System.currentTimeMillis()
-                    if (isArmingGraceActive) {
-                        isArmingGraceActive = false
-                    }
+                    if (isArmingGraceActive) isArmingGraceActive = false
                 }
 
-                // ========================================================
-                // 0. SAFE MODE / UNARMED / 45s ARMING GRACE WINDOW
-                // ========================================================
                 if (!isSentryArmed) {
                     isAudioRadarActive = false
                     tvLiveStatus.text = "● SENTRY DISARMED (SAFE MODE)"
@@ -1259,63 +1174,44 @@ class MainActivity : AppCompatActivity() {
                     tvCountdown.text = "Place phone on stand and sit at desk. No alarms active."
                     stopAlarmAndFinishAbsence()
                 } else {
-                    // ========================================================
-                    // 1. DUAL PRESENCE ENTRY & HARDWARE CHIME LOGIC
-                    // ========================================================
                     if (isFullyVerifiedAtDesk) {
                         deskLostTimestamp = 0L
                         hasAnnouncedExitForCurrentAbsence = false
-                        isAudioRadarActive = false // Instant stop to rapid beeps!
+                        isAudioRadarActive = false
 
                         if (!wasStationAlignedLastTick) {
-                            try {
-                                toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
+                            try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 300) } catch (e: Exception) { e.printStackTrace() }
                             wasStationAlignedLastTick = true
 
-                            // ENTRY ANNOUNCEMENTS
                             if (activeSlot != -1 && !slotLaunchAnnounced[activeSlot]) {
                                 slotLaunchAnnounced[activeSlot] = true
-                                mainHandler.postDelayed({
-                                    speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!")
-                                }, 400)
+                                mainHandler.postDelayed({ speak("Owner detected. Study Slot $activeSlot getting ready... 3... 2... 1... Go!") }, 400)
                             } else if (isPreSlotActive && !preSlotReadyAnnounced[preSlotNum]) {
                                 preSlotReadyAnnounced[preSlotNum] = true
                                 val bat = getBatteryPercentage()
                                 val batStr = if (bat > 0) "Battery $bat percent." else "Battery ready."
-                                mainHandler.postDelayed({
-                                    speak("Camera ready. $batStr")
-                                }, 400)
+                                mainHandler.postDelayed({ speak("Camera ready. $batStr") }, 400)
                             } else if (currentAbsenceState == AbsenceState.BUFFER) {
                                 val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
                                 val used = getBufferUsedCount(activeSlot)
                                 val left = (maxBuffers - used).coerceAtLeast(0)
                                 val leftStr = if (left == 1) "1 buffer left" else "$left buffers left"
                                 val bNum = currentBufferTripNum
-                                mainHandler.postDelayed({
-                                    speak("Buffer $bNum complete. $leftStr.")
-                                }, 400)
+                                mainHandler.postDelayed({ speak("Buffer $bNum complete. $leftStr.") }, 400)
                                 currentAbsenceState = AbsenceState.NONE
                             } else if (currentAbsenceState == AbsenceState.BREAK) {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                mainHandler.postDelayed({
-                                    speak("Break paused. $mins minutes left.")
-                                }, 400)
+                                mainHandler.postDelayed({ speak("Break paused. $mins minutes left.") }, 400)
                                 currentAbsenceState = AbsenceState.NONE
                             }
                         }
                     } else {
                         wasStationAlignedLastTick = false
-                        if (deskLostTimestamp == 0L) {
-                            deskLostTimestamp = System.currentTimeMillis()
-                        }
+                        if (deskLostTimestamp == 0L) deskLostTimestamp = System.currentTimeMillis()
 
                         val awaySinceMs = System.currentTimeMillis() - deskLostTimestamp
 
-                        // 8-SECOND FALSE-EXIT DEBOUNCE
                         if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
                             val usedBufferCount = getBufferUsedCount(activeSlot)
                             val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
@@ -1330,32 +1226,23 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) {
-                                    speak("Break on. $mins minutes left.")
-                                } else {
-                                    speak("Break ending. Under one minute left.")
-                                }
+                                if (mins >= 1) speak("Break on. $mins minutes left.") else speak("Break ending. Under one minute left.")
                                 currentAbsenceState = AbsenceState.BREAK
                             }
                             hasAnnouncedExitForCurrentAbsence = true
                         }
 
-                        // TRANSITION: BUFFER EXPIRED WHILE AWAY ➔ SEAMLESS SWITCH TO BREAK BANK
                         if (hasAnnouncedExitForCurrentAbsence && currentAbsenceState == AbsenceState.BUFFER) {
                             val awayDurationMs = System.currentTimeMillis() - lastSeenTimestamp
                             if (awayDurationMs > absenceThresholdMs) {
                                 currentAbsenceState = AbsenceState.BREAK
                                 val remainingSec = getRemainingBreakAllowanceSec(activeSlot)
                                 val mins = (remainingSec / 60).toInt()
-                                if (mins >= 1) {
-                                    speak("Buffer $currentBufferTripNum expired. Break on. $mins minutes left.")
-                                } else {
-                                    speak("Buffer $currentBufferTripNum expired. Break ending. Under one minute left.")
-                                }
+                                if (mins >= 1) speak("Buffer $currentBufferTripNum expired. Break on. $mins minutes left.")
+                                else speak("Buffer $currentBufferTripNum expired. Break ending. Under one minute left.")
                             }
                         }
 
-                        // CONFIGURE DYNAMIC PROFILE FOR RADAR ENGINE
                         val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
 
                         if (shouldAudioAssistBeActive) {
@@ -1385,9 +1272,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // ========================================================
-                    // 2. DISCIPLINE TRACKING AND ALARM ENFORCEMENT
-                    // ========================================================
                     if (activeSlot == -1) {
                         if (isPreSlotActive) {
                             tvLiveStatus.text = "⏱️ PRE-SLOT SETUP (SLOT $preSlotNum)"
@@ -1466,11 +1350,11 @@ class MainActivity : AppCompatActivity() {
         val trackerHandler = Handler(Looper.getMainLooper())
         trackerHandler.post(object : Runnable {
             override fun run() {
+                prefs.edit().putLong("last_heartbeat_timestamp", System.currentTimeMillis()).apply()
+
                 if (isArmingGraceActive) {
                     armingGraceRemainingSec--
-                    if (armingGraceRemainingSec <= 0) {
-                        isArmingGraceActive = false
-                    }
+                    if (armingGraceRemainingSec <= 0) isArmingGraceActive = false
                 }
 
                 if (isSentryArmed && !isArmingGraceActive && currentActiveSlot != -1) {
@@ -1534,7 +1418,7 @@ class MainActivity : AppCompatActivity() {
             val endMs = System.currentTimeMillis()
             val durationSec = (endMs - alarmTriggerStartMs) / 1000
             if (durationSec > 0 && currentActiveSlot != -1) {
-                recordAbsentInterval(currentActiveSlot, alarmTriggerStartMs, endMs, durationSec)
+                recordAbsentInterval(currentActiveSlot, alarmTriggerStartMs, endMs, durationSec, "User Left Desk")
             }
             isAlarmCurrentlyTracking = false
             alarmTriggerStartMs = 0L
@@ -1558,7 +1442,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveDayJson(dateKey: String, json: JSONObject) {
         prefs.edit().putString("event_data_$dateKey", json.toString()).apply()
-
         val existingDates = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
         val newSet = HashSet(existingDates)
         newSet.add(dateKey)
@@ -1570,40 +1453,33 @@ class MainActivity : AppCompatActivity() {
         val json = getDayJson(dateKey)
         val slots = json.optJSONObject("slots") ?: JSONObject()
         val slotObj = slots.optJSONObject(slotNum.toString()) ?: JSONObject().apply {
-            put("presentSec", 0L)
-            put("absentSec", 0L)
-            put("officialBreakSec", 0L)
-            put("absences", JSONArray())
-            put("breaks", JSONArray())
+            put("presentSec", 0L); put("absentSec", 0L); put("officialBreakSec", 0L)
+            put("absences", JSONArray()); put("breaks", JSONArray())
         }
 
-        val currentPresent = slotObj.optLong("presentSec", 0L)
-        slotObj.put("presentSec", currentPresent + sec)
+        slotObj.put("presentSec", slotObj.optLong("presentSec", 0L) + sec)
         slots.put(slotNum.toString(), slotObj)
         json.put("slots", slots)
         saveDayJson(dateKey, json)
     }
 
-    private fun recordAbsentInterval(slotNum: Int, startMs: Long, endMs: Long, durationSec: Long) {
-        val dateKey = getTodayDateKey()
+    private fun recordAbsentInterval(slotNum: Int, startMs: Long, endMs: Long, durationSec: Long, reason: String = "User Away") {
+        val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(startMs))
         val json = getDayJson(dateKey)
         val slots = json.optJSONObject("slots") ?: JSONObject()
         val slotObj = slots.optJSONObject(slotNum.toString()) ?: JSONObject().apply {
-            put("presentSec", 0L)
-            put("absentSec", 0L)
-            put("officialBreakSec", 0L)
-            put("absences", JSONArray())
-            put("breaks", JSONArray())
+            put("presentSec", 0L); put("absentSec", 0L); put("officialBreakSec", 0L)
+            put("absences", JSONArray()); put("breaks", JSONArray())
         }
 
-        val currentAbsent = slotObj.optLong("absentSec", 0L)
-        slotObj.put("absentSec", currentAbsent + durationSec)
+        slotObj.put("absentSec", slotObj.optLong("absentSec", 0L) + durationSec)
 
         val timeFormat = SimpleDateFormat("hh:mm:ss a", Locale.getDefault())
         val item = JSONObject().apply {
             put("start", timeFormat.format(Date(startMs)))
             put("end", timeFormat.format(Date(endMs)))
             put("durationSec", durationSec)
+            put("reason", reason)
         }
 
         val absences = slotObj.optJSONArray("absences") ?: JSONArray()
@@ -1618,13 +1494,9 @@ class MainActivity : AppCompatActivity() {
     private fun initAlarmSound() {
         try {
             mediaPlayer?.release()
-            val customUriStr = prefs.getString("custom_alarm_uri", null)
-            val alertUri = if (customUriStr != null) {
-                Uri.parse(customUriStr)
-            } else {
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            }
+            val customUri = prefs.getString("custom_alarm_uri", null)
+            val alertUri = if (customUri != null) Uri.parse(customUri)
+            else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(applicationContext, alertUri)
@@ -1632,31 +1504,24 @@ class MainActivity : AppCompatActivity() {
                 isLooping = true
                 prepare()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun startAlarm() {
         try {
-            val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarmVol, 0)
+            val maxAlarm = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarm, 0)
+            val maxMusic = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0)
+        } catch (e: Exception) { e.printStackTrace() }
 
-            val maxMusicVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusicVol, 0)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        if (mediaPlayer?.isPlaying == false) {
-            mediaPlayer?.start()
-        }
+        if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
     }
 
     private fun updateAdminStatusUI() {
-        val compName = ComponentName(this, AdminReceiver::class.java)
+        val comp = ComponentName(this, AdminReceiver::class.java)
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        if (dpm.isAdminActive(compName)) {
+        if (dpm.isAdminActive(comp)) {
             tvAdminStatus.text = "Anti-Uninstall: Active ✓"
             tvAdminStatus.setTextColor(Color.parseColor("#22C55E"))
             btnActivateAdmin.isEnabled = false
@@ -1670,9 +1535,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestDeviceAdmin() {
-        val compName = ComponentName(this, AdminReceiver::class.java)
+        val comp = ComponentName(this, AdminReceiver::class.java)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, compName)
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp)
             putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Protects Desk Sentry.")
         }
         startActivity(intent)
