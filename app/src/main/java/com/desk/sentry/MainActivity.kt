@@ -98,9 +98,11 @@ class MainActivity : AppCompatActivity() {
     // 5-Second False-Exit Debounce
     private val FALSE_EXIT_DEBOUNCE_MS = 5000L
 
+    // 45-Second Placement Grace Window
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
 
+    // Ultra-Fast Dedicated Beep Loop Variables
     private var currentBeepIntervalMs = 2000L
     private var currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
     private var currentBeepDurationMs = 70
@@ -110,6 +112,7 @@ class MainActivity : AppCompatActivity() {
     private val preSlotReadyAnnounced = BooleanArray(6) { false }
     private var hasAnnouncedLowBattery = false
 
+    // UI Components
     private lateinit var previewView: PreviewView
     private lateinit var tvLiveStatus: TextView
     private lateinit var tvCountdown: TextView
@@ -169,6 +172,7 @@ class MainActivity : AppCompatActivity() {
         isSentryArmed = prefs.getBoolean("sentry_armed", false)
 
         try {
+            // STREAM_ALARM with maximum 100% volume for dual-output punch
             toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -190,7 +194,7 @@ class MainActivity : AppCompatActivity() {
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
-        // Double-Verification First-Time PIN Setup
+        // Double-Confirmation PIN Setup on first launch
         if (!prefs.contains("user_pin")) {
             showFirstTimeSetPinDialog()
         }
@@ -206,6 +210,10 @@ class MainActivity : AppCompatActivity() {
         startDedicatedRadarBeepEngine()
     }
 
+    /**
+     * SHUTDOWN / BATTERY DRAIN RECOVERY ENGINE:
+     * Automatically logs any powered-off downtime during scheduled study slots as Absent.
+     */
     private fun checkAndProcessDeviceShutdownRecovery() {
         val lastBeat = prefs.getLong("last_heartbeat_timestamp", 0L)
         val now = System.currentTimeMillis()
@@ -271,9 +279,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 tts?.setSpeechRate(0.85f)
                 tts?.setPitch(1.0f)
+
+                // DUAL ROUTING: USAGE_ALARM + FLAG_AUDIBILITY_ENFORCED
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                     .build()
                 tts?.setAudioAttributes(audioAttributes)
                 isTtsReady = true
@@ -717,8 +728,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * DOUBLE-VERIFICATION FIRST-TIME PIN SETUP:
-     * Contains two input fields: Create PIN + Confirm PIN.
+     * DOUBLE-CONFIRMATION PIN SETUP:
+     * Two input fields (Create PIN + Confirm PIN) preventing mistyping.
      */
     private fun showFirstTimeSetPinDialog() {
         val container = LinearLayout(this).apply {
@@ -800,9 +811,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * STEP 1/2: ENTER CURRENT PIN
-     */
     private fun showChangePinTwoStepWorkflow() {
         val savedPin = prefs.getString("user_pin", "1234") ?: "1234"
         val inputOld = EditText(this).apply {
@@ -825,9 +833,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * STEP 2/2: DOUBLE-VERIFICATION FOR NEW PIN (New PIN + Confirm New PIN)
-     */
     private fun showNewPinPrompt() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1491,6 +1496,10 @@ class MainActivity : AppCompatActivity() {
         saveDayJson(dateKey, json)
     }
 
+    /**
+     * DUAL-OUTPUT ALARM ROUTING:
+     * Plays through both internal phone speaker and 3.5mm connected speaker simultaneously.
+     */
     private fun initAlarmSound() {
         try {
             mediaPlayer?.release()
@@ -1498,9 +1507,15 @@ class MainActivity : AppCompatActivity() {
             val alertUri = if (customUri != null) Uri.parse(customUri)
             else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED) // Dual hardware routing flag
+                .build()
+
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(applicationContext, alertUri)
-                setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                setAudioAttributes(audioAttributes)
                 isLooping = true
                 prepare()
             }
