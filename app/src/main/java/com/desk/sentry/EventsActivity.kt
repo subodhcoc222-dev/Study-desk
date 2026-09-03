@@ -43,9 +43,6 @@ class EventsActivity : AppCompatActivity() {
         SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
     }
 
-    /**
-     * SCREEN 1: DATES SELECTOR LIST
-     */
     private fun showDatesListView() {
         rootLayout.removeAllViews()
 
@@ -142,13 +139,15 @@ class EventsActivity : AppCompatActivity() {
     }
 
     /**
-     * SCREEN 2: ALL-DAY FULL REPORT WITH PERMANENT TOP-RIGHT PINNED STICKY DATE
+     * ALL-DAY FULL REPORT:
+     * Date is permanently pinned in the top app header bar (Top-Right).
+     * Never disappears on scroll.
      */
     private fun showAllDayFullReportScreen(dateKey: String, dayName: String, json: JSONObject) {
         rootLayout.removeAllViews()
 
         // ============================================================
-        // 1. FIXED TOP APP BAR (HOLDING TITLE ON LEFT + DATE ON RIGHT)
+        // 1. PINNED TOP APP BAR: TITLE (LEFT) + STICKY DATE (RIGHT)
         // ============================================================
         val topAppBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -163,9 +162,12 @@ class EventsActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(Color.parseColor("#334155"))
-            val btnParams = LinearLayout.LayoutParams(54, 40)
-            btnParams.marginEnd = 14
-            layoutParams = btnParams
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = 14
+            }
             setOnClickListener { showDatesListView() }
         }
 
@@ -177,7 +179,7 @@ class EventsActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        // PERMANENT STICKY DATE IN THE TOP-RIGHT CORNER (NEVER SCROLLS AWAY)
+        // PERMANENT STICKY DATE BADGE IN TOP-RIGHT CORNER
         val tvStickyDateBadge = TextView(this).apply {
             text = "📅 $dayName"
             setTextColor(Color.parseColor("#FBBF24"))
@@ -198,7 +200,7 @@ class EventsActivity : AppCompatActivity() {
         rootLayout.addView(topAppBar)
 
         // ============================================================
-        // 2. SCROLLABLE CONTENT (SUMMARY CARD + SLOTS 1 TO 5)
+        // 2. SCROLLABLE CONTENT (SUMMARY + SLOTS 1 TO 5)
         // ============================================================
         val scrollView = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -215,7 +217,6 @@ class EventsActivity : AppCompatActivity() {
         var totalAbsentSec = 0L
         var totalBreakSec = 0L
 
-        // CALCULATE TOTALS FIRST
         for (slotNum in 1..5) {
             val slotObj = slots.optJSONObject(slotNum.toString()) ?: continue
             totalPresentSec += slotObj.optLong("presentSec", 0L)
@@ -223,10 +224,9 @@ class EventsActivity : AppCompatActivity() {
             totalBreakSec += slotObj.optLong("officialBreakSec", 0L)
         }
 
-        // TOTAL DAY SUMMARY CARD (TEAL/GREEN BANNER AT THE TOP OF SCROLL)
+        // TOTAL DAY SUMMARY CARD
         val summaryCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#0F766E"))
             setPadding(16, 12, 16, 12)
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#0F766E"))
@@ -262,7 +262,7 @@ class EventsActivity : AppCompatActivity() {
         summaryCard.addView(tvAway)
         contentLayout.addView(summaryCard)
 
-        // INDIVIDUAL SLOTS CARDS (SLOT 1 TO SLOT 5)
+        // SLOTS 1 TO 5 BREAKDOWN
         for (slotNum in 1..5) {
             val slotObj = slots.optJSONObject(slotNum.toString())
             val presentSec = slotObj?.optLong("presentSec", 0L) ?: 0L
@@ -299,7 +299,6 @@ class EventsActivity : AppCompatActivity() {
             slotCard.addView(tvSlotTitle)
             slotCard.addView(tvSlotStats)
 
-            // UNEXCUSED ABSENCE INTERVALS BREAKDOWN (IF ANY)
             val absences = slotObj?.optJSONArray("absences")
             if (absences != null && absences.length() > 0) {
                 for (j in 0 until absences.length()) {
@@ -308,7 +307,7 @@ class EventsActivity : AppCompatActivity() {
                     val tvInterval = TextView(this).apply {
                         text = "  ⚠️ ${item.optString("start")} – ${item.optString("end")} (${formatSec(item.optLong("durationSec"))}) [$reason]"
                         setTextColor(Color.parseColor("#F87171"))
-                        textSize = 9sp
+                        textSize = 10f // Corrected to valid float
                     }
                     slotCard.addView(tvInterval)
                 }
