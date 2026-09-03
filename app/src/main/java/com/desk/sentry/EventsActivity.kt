@@ -4,518 +4,327 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
-import android.os.Build
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.view.WindowManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.cardview.widget.CardView
-import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.HashSet
-import java.util.Locale
+import java.util.*
 
 class EventsActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
-    private lateinit var contentContainer: LinearLayout
-    private lateinit var tvHeaderTitle: TextView
-    private lateinit var btnBack: Button
-
-    private var currentLevel = 1
-    private var selectedDateKey = ""
-    private var selectedDayName = ""
+    private lateinit var rootLayout: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Show directly over Lock Screen without requesting password dismiss
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        }
-        @Suppress("DEPRECATION")
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-        )
-
-        setContentView(R.layout.activity_events)
+        SentryService.isEventsActivityVisible = true
+        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
 
         prefs = getSharedPreferences("DeskSentryPrefs", Context.MODE_PRIVATE)
 
-        contentContainer = findViewById(R.id.eventsContentContainer)
-        tvHeaderTitle = findViewById(R.id.tvHeaderTitle)
-        btnBack = findViewById(R.id.btnBack)
+        rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#0F172A"))
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        setContentView(rootLayout)
 
-        btnBack.setOnClickListener { handleBackNavigation() }
-
-        showLevel1DateList()
+        showDatesListView()
     }
 
-    override fun onResume() {
-        super.onResume()
-        SentryService.isEventsActivityVisible = true
-        SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
-    }
-
-    override fun onPause() {
-        super.onPause()
+    override fun onDestroy() {
+        super.onDestroy()
         SentryService.isEventsActivityVisible = false
         SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
     }
 
-    private fun handleBackNavigation() {
-        when (currentLevel) {
-            3 -> showLevel2SlotMenu(selectedDateKey, selectedDayName)
-            2 -> showLevel1DateList()
-            else -> finish()
-        }
-    }
+    /**
+     * SCREEN 1: DATES SELECTOR LIST
+     */
+    private fun showDatesListView() {
+        rootLayout.removeAllViews()
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (currentLevel > 1) {
-            handleBackNavigation()
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            setPadding(24, 18, 24, 18)
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val tvTitle = TextView(this).apply {
+            text = "📊 Desk Sentry Study Logs"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val btnClose = Button(this).apply {
+            text = "✕ Close"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#334155"))
+            setOnClickListener { finish() }
+        }
+
+        topBar.addView(tvTitle)
+        topBar.addView(btnClose)
+        rootLayout.addView(topBar)
+
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            isFillViewport = true
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 16, 20, 24)
+        }
+
+        val datesSet = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
+
+        if (datesSet.isEmpty()) {
+            val emptyTv = TextView(this).apply {
+                text = "No study records found yet.\nComplete your first session to view analytics."
+                setTextColor(Color.GRAY)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(0, 100, 0, 0)
+            }
+            container.addView(emptyTv)
         } else {
-            super.onBackPressed()
-        }
-    }
+            val sortedDates = datesSet.sortedDescending()
+            for (dateKey in sortedDates) {
+                val raw = prefs.getString("event_data_$dateKey", null) ?: continue
+                val json = JSONObject(raw)
+                val dayName = json.optString("dayName", dateKey)
 
-    private fun getDayJson(dateKey: String): JSONObject {
-        val raw = prefs.getString("event_data_$dateKey", null)
-        return if (raw != null) JSONObject(raw) else {
-            JSONObject().apply {
-                put("date", dateKey)
-                put("dayName", dateKey)
-                put("slots", JSONObject())
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setBackgroundColor(Color.parseColor("#1E293B"))
+                    setPadding(20, 16, 20, 16)
+                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    params.setMargins(0, 0, 0, 12)
+                    layoutParams = params
+                }
+
+                val tvDate = TextView(this).apply {
+                    text = "📅 $dayName"
+                    setTextColor(Color.parseColor("#38BDF8"))
+                    textSize = 14f
+                    typeface = Typeface.DEFAULT_BOLD
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                val btnOpenReport = Button(this).apply {
+                    text = "View Full Report →"
+                    textSize = 11f
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#0284C7"))
+                    setOnClickListener {
+                        showAllDayFullReportScreen(dateKey, dayName, json)
+                    }
+                }
+
+                card.addView(tvDate)
+                card.addView(btnOpenReport)
+                container.addView(card)
             }
         }
-    }
 
-    private fun formatDuration(sec: Long): String {
-        val h = sec / 3600
-        val m = (sec % 3600) / 60
-        val s = sec % 60
-        return if (h > 0) String.format("%02dh %02dm %02ds", h, m, s)
-        else String.format("%02dm %02ds", m, s)
+        scrollView.addView(container)
+        rootLayout.addView(scrollView)
     }
 
     /**
-     * LEVEL 1: Full-Screen Date List
+     * SCREEN 2: ALL-DAY FULL REPORT WITH PERMANENT TOP-RIGHT PINNED STICKY DATE
      */
-    private fun showLevel1DateList() {
-        currentLevel = 1
-        tvHeaderTitle.text = "📅 Recorded Study Dates"
-        contentContainer.removeAllViews()
+    private fun showAllDayFullReportScreen(dateKey: String, dayName: String, json: JSONObject) {
+        rootLayout.removeAllViews()
 
-        val dateSet = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
-        val sortedDates = dateSet.toMutableList()
-        val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        if (!sortedDates.contains(todayKey)) sortedDates.add(todayKey)
-        sortedDates.sortDescending()
-
-        for (dateKey in sortedDates) {
-            val dayJson = getDayJson(dateKey)
-            val dayName = dayJson.optString("dayName", dateKey)
-
-            val card = CardView(this).apply {
-                radius = 16f
-                setCardBackgroundColor(Color.parseColor("#1E293B"))
-                cardElevation = 4f
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 0, 0, 12)
-                layoutParams = params
-            }
-
-            val cardContent = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(18, 16, 18, 16)
-            }
-
-            val tvDate = TextView(this).apply {
-                text = if (dateKey == todayKey) "📍 Today • $dayName" else "📅 $dayName"
-                textSize = 15f
-                setTextColor(Color.WHITE)
-                setTypeface(null, Typeface.BOLD)
-            }
-            val tvSub = TextView(this).apply {
-                text = "Tap to view Slot 1–5 breakdown & logs →"
-                textSize = 12f
-                setTextColor(Color.parseColor("#94A3B8"))
-                setPadding(0, 4, 0, 0)
-            }
-
-            cardContent.addView(tvDate)
-            cardContent.addView(tvSub)
-            card.addView(cardContent)
-
-            card.setOnClickListener {
-                selectedDateKey = dateKey
-                selectedDayName = dayName
-                showLevel2SlotMenu(dateKey, dayName)
-            }
-
-            contentContainer.addView(card)
+        // ============================================================
+        // 1. FIXED TOP APP BAR (HOLDING TITLE ON LEFT + DATE ON RIGHT)
+        // ============================================================
+        val topAppBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            setPadding(16, 12, 20, 12)
+            gravity = Gravity.CENTER_VERTICAL
         }
-    }
 
-    /**
-     * LEVEL 2: Slots Menu for Selected Date
-     */
-    private fun showLevel2SlotMenu(dateKey: String, dayName: String) {
-        currentLevel = 2
-        tvHeaderTitle.text = dayName
-        contentContainer.removeAllViews()
+        val btnBack = Button(this).apply {
+            text = "←"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(Color.parseColor("#334155"))
+            val btnParams = LinearLayout.LayoutParams(54, 40)
+            btnParams.marginEnd = 14
+            layoutParams = btnParams
+            setOnClickListener { showDatesListView() }
+        }
 
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
+        val tvReportHeading = TextView(this).apply {
+            text = "All-Day Full Report"
+            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
 
-        for (i in 1..5) {
-            val slotData = slotsObj.optJSONObject(i.toString())
-            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-            val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
-
-            val card = CardView(this).apply {
-                radius = 16f
-                setCardBackgroundColor(Color.parseColor("#1E293B"))
-                cardElevation = 4f
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 0, 0, 10)
-                layoutParams = params
+        // PERMANENT STICKY DATE IN THE TOP-RIGHT CORNER (NEVER SCROLLS AWAY)
+        val tvStickyDateBadge = TextView(this).apply {
+            text = "📅 $dayName"
+            setTextColor(Color.parseColor("#FBBF24"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#312E81"))
+                cornerRadius = 8f
+                setStroke(1, Color.parseColor("#6366F1"))
             }
+            setPadding(14, 6, 14, 6)
+        }
 
-            val cardContent = LinearLayout(this).apply {
+        topAppBar.addView(btnBack)
+        topAppBar.addView(tvReportHeading)
+        topAppBar.addView(tvStickyDateBadge)
+        rootLayout.addView(topAppBar)
+
+        // ============================================================
+        // 2. SCROLLABLE CONTENT (SUMMARY CARD + SLOTS 1 TO 5)
+        // ============================================================
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            isFillViewport = true
+        }
+
+        val contentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 12, 16, 20)
+        }
+
+        val slots = json.optJSONObject("slots") ?: JSONObject()
+        var totalPresentSec = 0L
+        var totalAbsentSec = 0L
+        var totalBreakSec = 0L
+
+        // CALCULATE TOTALS FIRST
+        for (slotNum in 1..5) {
+            val slotObj = slots.optJSONObject(slotNum.toString()) ?: continue
+            totalPresentSec += slotObj.optLong("presentSec", 0L)
+            totalAbsentSec += slotObj.optLong("absentSec", 0L)
+            totalBreakSec += slotObj.optLong("officialBreakSec", 0L)
+        }
+
+        // TOTAL DAY SUMMARY CARD (TEAL/GREEN BANNER AT THE TOP OF SCROLL)
+        val summaryCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#0F766E"))
+            setPadding(16, 12, 16, 12)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0F766E"))
+                cornerRadius = 12f
+            }
+            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            params.setMargins(0, 0, 0, 12)
+            layoutParams = params
+        }
+
+        val tvStudy = TextView(this).apply {
+            text = "🏆 Total Study Time: ${formatSec(totalPresentSec)}"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        val tvBreaks = TextView(this).apply {
+            text = "☕ Total Official Breaks: ${formatSec(totalBreakSec)}"
+            setTextColor(Color.parseColor("#E0F2FE"))
+            textSize = 11f
+            setPadding(0, 3, 0, 2)
+        }
+
+        val tvAway = TextView(this).apply {
+            text = "⚠️ Unexcused Away: ${formatSec(totalAbsentSec)}"
+            setTextColor(Color.parseColor("#FECACA"))
+            textSize = 11f
+        }
+
+        summaryCard.addView(tvStudy)
+        summaryCard.addView(tvBreaks)
+        summaryCard.addView(tvAway)
+        contentLayout.addView(summaryCard)
+
+        // INDIVIDUAL SLOTS CARDS (SLOT 1 TO SLOT 5)
+        for (slotNum in 1..5) {
+            val slotObj = slots.optJSONObject(slotNum.toString())
+            val presentSec = slotObj?.optLong("presentSec", 0L) ?: 0L
+            val absentSec = slotObj?.optLong("absentSec", 0L) ?: 0L
+            val breakSec = slotObj?.optLong("officialBreakSec", 0L) ?: 0L
+
+            val slotCard = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(16, 14, 16, 14)
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#1E293B"))
+                    cornerRadius = 10f
+                    setStroke(1, Color.parseColor("#334155"))
+                }
+                setPadding(16, 10, 16, 10)
+                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                params.setMargins(0, 0, 0, 8)
+                layoutParams = params
             }
 
             val tvSlotTitle = TextView(this).apply {
-                text = "📘 Slot $i Overview"
-                textSize = 14f
+                text = "📘 Slot $slotNum Summary"
                 setTextColor(Color.parseColor("#38BDF8"))
-                setTypeface(null, Typeface.BOLD)
-            }
-
-            val tvStats = TextView(this).apply {
-                text = "🟢 Study: ${formatDuration(pSec)} | ☕ Break: ${formatDuration(bSec)} | 🔴 Away: ${formatDuration(aSec)}"
                 textSize = 12f
-                setTextColor(Color.WHITE)
-                setPadding(0, 4, 0, 0)
+                typeface = Typeface.DEFAULT_BOLD
             }
 
-            cardContent.addView(tvSlotTitle)
-            cardContent.addView(tvStats)
-            card.addView(cardContent)
-
-            card.setOnClickListener {
-                showLevel3SlotDetail(dateKey, dayName, i)
+            val tvSlotStats = TextView(this).apply {
+                text = "Study: ${formatSec(presentSec)} | Breaks: ${formatSec(breakSec)} | Away: ${formatSec(absentSec)}"
+                setTextColor(Color.parseColor("#E2E8F0"))
+                textSize = 10f
+                setPadding(0, 3, 0, 3)
             }
 
-            contentContainer.addView(card)
+            slotCard.addView(tvSlotTitle)
+            slotCard.addView(tvSlotStats)
+
+            // UNEXCUSED ABSENCE INTERVALS BREAKDOWN (IF ANY)
+            val absences = slotObj?.optJSONArray("absences")
+            if (absences != null && absences.length() > 0) {
+                for (j in 0 until absences.length()) {
+                    val item = absences.getJSONObject(j)
+                    val reason = item.optString("reason", "Absent")
+                    val tvInterval = TextView(this).apply {
+                        text = "  ⚠️ ${item.optString("start")} – ${item.optString("end")} (${formatSec(item.optLong("durationSec"))}) [$reason]"
+                        setTextColor(Color.parseColor("#F87171"))
+                        textSize = 9sp
+                    }
+                    slotCard.addView(tvInterval)
+                }
+            }
+
+            contentLayout.addView(slotCard)
         }
 
-        // ALL-DAY CONSOLIDATED REPORT BUTTON
-        val btnAllDay = Button(this).apply {
-            text = "🌟 📊 View All-Day Consolidated Report"
-            textSize = 13f
-            setTextColor(Color.BLACK)
-            setBackgroundColor(Color.parseColor("#F59E0B"))
-            setTypeface(null, Typeface.BOLD)
-            setAllCaps(false)
-            setPadding(0, 16, 0, 16)
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 8, 0, 16)
-            layoutParams = params
-            setOnClickListener {
-                showLevel3AllDaySummary(dateKey, dayName)
-            }
-        }
-        contentContainer.addView(btnAllDay)
+        scrollView.addView(contentLayout)
+        rootLayout.addView(scrollView)
     }
 
-    /**
-     * LEVEL 3: Detailed Data Log for Specific Slot
-     */
-    private fun showLevel3SlotDetail(dateKey: String, dayName: String, slotNum: Int) {
-        currentLevel = 3
-        tvHeaderTitle.text = "Slot $slotNum Details"
-        contentContainer.removeAllViews()
-
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
-        val slotData = slotsObj.optJSONObject(slotNum.toString())
-
-        val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-        val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-        val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
-        val absences = slotData?.optJSONArray("absences") ?: JSONArray()
-        val breaks = slotData?.optJSONArray("breaks") ?: JSONArray()
-
-        val summaryCard = CardView(this).apply {
-            radius = 16f
-            setCardBackgroundColor(Color.parseColor("#1E293B"))
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 0, 0, 14)
-            layoutParams = params
-        }
-        val sumLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(18, 16, 18, 16)
-        }
-        val tvPres = TextView(this).apply {
-            text = "🟢 Total Study (Present): ${formatDuration(pSec)}"
-            textSize = 14f
-            setTextColor(Color.parseColor("#22C55E"))
-            setTypeface(null, Typeface.BOLD)
-        }
-        val tvBrk = TextView(this).apply {
-            text = "☕ Total Official Breaks: ${formatDuration(bSec)}"
-            textSize = 13f
-            setTextColor(Color.parseColor("#38BDF8"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 4, 0, 0)
-        }
-        val tvAbs = TextView(this).apply {
-            text = "🔴 Unexcused Absence: ${formatDuration(aSec)}"
-            textSize = 13f
-            setTextColor(Color.parseColor("#EF4444"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 4, 0, 0)
-        }
-        sumLayout.addView(tvPres)
-        sumLayout.addView(tvBrk)
-        sumLayout.addView(tvAbs)
-        summaryCard.addView(sumLayout)
-        contentContainer.addView(summaryCard)
-
-        // 1. OFFICIAL BREAKS LOG
-        val tvBreakHeader = TextView(this).apply {
-            text = "☕ Official Break History:"
-            textSize = 13f
-            setTextColor(Color.parseColor("#38BDF8"))
-            setPadding(0, 4, 0, 4)
-        }
-        contentContainer.addView(tvBreakHeader)
-
-        if (breaks.length() == 0) {
-            val tvEmptyBrk = TextView(this).apply {
-                text = "• No official breaks taken yet for this slot."
-                textSize = 11f
-                setTextColor(Color.GRAY)
-                setPadding(0, 2, 0, 8)
-            }
-            contentContainer.addView(tvEmptyBrk)
-        } else {
-            for (k in 0 until breaks.length()) {
-                val item = breaks.getJSONObject(k)
-                val cardItem = CardView(this).apply {
-                    radius = 12f
-                    setCardBackgroundColor(Color.parseColor("#1E293B"))
-                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    params.setMargins(0, 0, 0, 6)
-                    layoutParams = params
-                }
-                val itemLayout = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(14, 10, 14, 10)
-                }
-                val tvRange = TextView(this).apply {
-                    text = "☕ Break ${k + 1}: ${item.optString("start")} ➔ ${item.optString("end")}"
-                    textSize = 12f
-                    setTextColor(Color.WHITE)
-                    setTypeface(null, Typeface.BOLD)
-                }
-                val tvDur = TextView(this).apply {
-                    text = "Duration: ${formatDuration(item.optLong("durationSec"))}"
-                    textSize = 11f
-                    setTextColor(Color.parseColor("#38BDF8"))
-                    setPadding(0, 2, 0, 0)
-                }
-                itemLayout.addView(tvRange)
-                itemLayout.addView(tvDur)
-                cardItem.addView(itemLayout)
-                contentContainer.addView(cardItem)
-            }
-        }
-
-        // 2. UNEXCUSED ALARM LOG
-        val tvIntervalHeader = TextView(this).apply {
-            text = "⚠ Unexcused Away / Alarm Ring History:"
-            textSize = 13f
-            setTextColor(Color.parseColor("#EF4444"))
-            setPadding(0, 8, 0, 4)
-        }
-        contentContainer.addView(tvIntervalHeader)
-
-        if (absences.length() == 0) {
-            val tvEmpty = TextView(this).apply {
-                text = "🎉 Perfect discipline! No unexcused absences recorded."
-                textSize = 11f
-                setTextColor(Color.GRAY)
-                setPadding(0, 2, 0, 8)
-            }
-            contentContainer.addView(tvEmpty)
-        } else {
-            for (j in 0 until absences.length()) {
-                val item = absences.getJSONObject(j)
-                val cardItem = CardView(this).apply {
-                    radius = 12f
-                    setCardBackgroundColor(Color.parseColor("#1E293B"))
-                    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    params.setMargins(0, 0, 0, 6)
-                    layoutParams = params
-                }
-                val itemLayout = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(14, 10, 14, 10)
-                }
-                val tvRange = TextView(this).apply {
-                    text = "${j + 1}. ${item.optString("start")} ➔ ${item.optString("end")}"
-                    textSize = 12f
-                    setTextColor(Color.WHITE)
-                    setTypeface(null, Typeface.BOLD)
-                }
-                val tvDur = TextView(this).apply {
-                    text = "Away Duration: ${formatDuration(item.optLong("durationSec"))}"
-                    textSize = 11f
-                    setTextColor(Color.parseColor("#EF4444"))
-                    setPadding(0, 2, 0, 0)
-                }
-                itemLayout.addView(tvRange)
-                itemLayout.addView(tvDur)
-                cardItem.addView(itemLayout)
-                contentContainer.addView(cardItem)
-            }
-        }
-    }
-
-    /**
-     * LEVEL 3: Full-Day Consolidated Report with Tamper-Proof Date Header
-     */
-    private fun showLevel3AllDaySummary(dateKey: String, dayName: String) {
-        currentLevel = 3
-        tvHeaderTitle.text = "All-Day Full Report"
-        contentContainer.removeAllViews()
-
-        // 0. ANTI-CHEAT TAMPER-PROOF DATE & DAY VERIFICATION CARD
-        val verifyHeaderCard = CardView(this).apply {
-            radius = 16f
-            setCardBackgroundColor(Color.parseColor("#1E1B4B")) // Deep Indigo Header
-            cardElevation = 6f
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 0, 0, 14)
-            layoutParams = params
-        }
-        val verifyLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 16, 20, 16)
-        }
-        val tvDateStamp = TextView(this).apply {
-            text = "📅 REPORT DATE: $dayName"
-            textSize = 16f
-            setTextColor(Color.parseColor("#F59E0B")) // Bright Amber/Gold
-            setTypeface(null, Typeface.BOLD)
-        }
-        val tvDateKeySub = TextView(this).apply {
-            text = "🗓️ Record Date ID: $dateKey  •  🔒 Certified Desk Sentry System Log"
-            textSize = 12f
-            setTextColor(Color.parseColor("#A5B4FC"))
-            setPadding(0, 4, 0, 0)
-        }
-        verifyLayout.addView(tvDateStamp)
-        verifyLayout.addView(tvDateKeySub)
-        verifyHeaderCard.addView(verifyLayout)
-        contentContainer.addView(verifyHeaderCard)
-
-        val dayJson = getDayJson(dateKey)
-        val slotsObj = dayJson.optJSONObject("slots") ?: JSONObject()
-
-        var grandPresent = 0L
-        var grandBreak = 0L
-        var grandAbsent = 0L
-
-        for (i in 1..5) {
-            val slotData = slotsObj.optJSONObject(i.toString())
-            grandPresent += slotData?.optLong("presentSec", 0L) ?: 0L
-            grandBreak += slotData?.optLong("officialBreakSec", 0L) ?: 0L
-            grandAbsent += slotData?.optLong("absentSec", 0L) ?: 0L
-        }
-
-        val grandCard = CardView(this).apply {
-            radius = 16f
-            setCardBackgroundColor(Color.parseColor("#0F766E"))
-            val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            params.setMargins(0, 0, 0, 14)
-            layoutParams = params
-        }
-        val grandLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(18, 16, 18, 16)
-        }
-        val tvGPres = TextView(this).apply {
-            text = "🏆 Total Study Time: ${formatDuration(grandPresent)}"
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setTypeface(null, Typeface.BOLD)
-        }
-        val tvGBreak = TextView(this).apply {
-            text = "☕ Total Official Breaks: ${formatDuration(grandBreak)}"
-            textSize = 13f
-            setTextColor(Color.parseColor("#BAE6FD"))
-            setPadding(0, 3, 0, 0)
-        }
-        val tvGAbs = TextView(this).apply {
-            text = "⚠ Unexcused Away: ${formatDuration(grandAbsent)}"
-            textSize = 13f
-            setTextColor(Color.parseColor("#FEF08A"))
-            setPadding(0, 3, 0, 0)
-        }
-        grandLayout.addView(tvGPres)
-        grandLayout.addView(tvGBreak)
-        grandLayout.addView(tvGAbs)
-        grandCard.addView(grandLayout)
-        contentContainer.addView(grandCard)
-
-        for (i in 1..5) {
-            val slotData = slotsObj.optJSONObject(i.toString())
-            val pSec = slotData?.optLong("presentSec", 0L) ?: 0L
-            val bSec = slotData?.optLong("officialBreakSec", 0L) ?: 0L
-            val aSec = slotData?.optLong("absentSec", 0L) ?: 0L
-
-            val card = CardView(this).apply {
-                radius = 14f
-                setCardBackgroundColor(Color.parseColor("#1E293B"))
-                val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                params.setMargins(0, 0, 0, 10)
-                layoutParams = params
-            }
-            val lay = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(14, 12, 14, 12)
-            }
-            val tvTitle = TextView(this).apply {
-                text = "📘 Slot $i Summary"
-                textSize = 13f
-                setTextColor(Color.parseColor("#38BDF8"))
-                setTypeface(null, Typeface.BOLD)
-            }
-            val tvBody = TextView(this).apply {
-                text = "Study: ${formatDuration(pSec)} | Breaks: ${formatDuration(bSec)} | Away: ${formatDuration(aSec)}"
-                textSize = 12f
-                setTextColor(Color.WHITE)
-                setPadding(0, 3, 0, 0)
-            }
-            lay.addView(tvTitle)
-            lay.addView(tvBody)
-            card.addView(lay)
-            contentContainer.addView(card)
-        }
+    private fun formatSec(sec: Long): String {
+        val h = sec / 3600
+        val m = (sec % 3600) / 60
+        val s = sec % 60
+        return if (h > 0) String.format("%dh %02dm %02ds", h, m, s) else String.format("%02dm %02ds", m, s)
     }
 }
