@@ -57,4 +57,7 @@ dependencies {
 
     // Google Play Services Tasks
     implementation("com.google.android.gms:play-services-tasks:18.1.0")
+
+    // Firebase Realtime Database (Resolves compileDebugKotlin error)
+    implementation("com.google.firebase:firebase-database:20.3.1")
 }
