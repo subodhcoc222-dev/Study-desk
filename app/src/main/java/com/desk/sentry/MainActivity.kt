@@ -42,6 +42,7 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.firebase.database.FirebaseDatabase
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -216,6 +217,21 @@ class MainActivity : AppCompatActivity() {
         startMonitoringLoop()
         startPeriodicTimeTracker()
         startDedicatedRadarBeepEngine()
+    }
+
+    private fun setFirebaseAlarmActive(active: Boolean) {
+        try {
+            val deviceId = prefs.getString("sentry_device_id", null)
+                ?: Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                ?: "default_sentry"
+
+            FirebaseDatabase.getInstance().getReference("desk_sentry")
+                .child(deviceId)
+                .child("alarm_active")
+                .setValue(active)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun checkAndProcessDeviceShutdownRecovery() {
@@ -1550,6 +1566,7 @@ class MainActivity : AppCompatActivity() {
         if (mediaPlayer?.isPlaying == true) {
             mediaPlayer?.pause()
             mediaPlayer?.seekTo(0)
+            setFirebaseAlarmActive(false)
         }
         if (isAlarmCurrentlyTracking) {
             val endMs = System.currentTimeMillis()
@@ -1658,7 +1675,10 @@ class MainActivity : AppCompatActivity() {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0)
         } catch (e: Exception) { e.printStackTrace() }
 
-        if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
+        if (mediaPlayer?.isPlaying == false) {
+            mediaPlayer?.start()
+            setFirebaseAlarmActive(true)
+        }
     }
 
     private fun updateAdminStatusUI() {
@@ -1695,6 +1715,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        setFirebaseAlarmActive(false)
         isAudioRadarActive = false
         mediaPlayer?.release()
         mediaPlayer = null
